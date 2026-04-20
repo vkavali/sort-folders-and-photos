@@ -1,0 +1,5 @@
+PyQt6>=6.5
+rapidfuzz>=3.0
+Pillow>=10.0
+exifread>=3.0
+xxhash>=3.0
