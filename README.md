@@ -27,17 +27,44 @@ See [`SPEC.md`](SPEC.md) for the full design.
 - **Drag-and-drop** folder inputs plus a **merge-clusters** UI (multi-select
   button AND drag-and-drop rows).
 
-## Install
+## Run from source
 
 ```
 pip install -r requirements.txt
-```
-
-## Run
-
-```
 python -m app.main
 ```
+
+Requires Python 3.10+.
+
+## Install as a desktop app
+
+Bundle into a standalone, double-clickable app with PyInstaller. No Python
+install required on the target machine afterwards.
+
+**Windows:**
+
+```
+build.bat
+```
+
+Output: `dist\SemanticFileAggregator\SemanticFileAggregator.exe`. Pin it to
+Start / Taskbar, or drop a shortcut into `shell:programs` to make it appear
+in the Start menu.
+
+**macOS / Linux:**
+
+```
+./build.sh
+```
+
+macOS output: `dist/SemanticFileAggregator.app` — drag to `/Applications`.
+Linux output: `dist/SemanticFileAggregator/SemanticFileAggregator` — install
+under `~/.local/opt/` and drop a `.desktop` file in
+`~/.local/share/applications/` for menu integration.
+
+Under the hood both scripts run `pyinstaller --noconfirm
+SemanticFileAggregator.spec`. The spec file bundles all `app` submodules and
+produces a windowed (no-console) desktop app.
 
 ## Self-verification
 

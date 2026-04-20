@@ -4,3 +4,5 @@ __pycache__/
 .pytest_cache/
 .venv/
 _test_tree/
+build/
+dist/
