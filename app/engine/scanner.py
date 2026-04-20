@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterator
 
-from app.categories import MEDIA_EXTENSIONS
+from app.config import MEDIA_EXTENSIONS
 
 
 @dataclass(frozen=True)
@@ -43,17 +43,14 @@ def _iter_media(root: Path) -> Iterator[MediaItem]:
                                     parent_folder=current.name,
                                     size_bytes=stat.st_size,
                                 )
-                    except (PermissionError, FileNotFoundError):
+                    except (PermissionError, FileNotFoundError, OSError):
                         continue
-        except (PermissionError, FileNotFoundError):
+        except (PermissionError, FileNotFoundError, OSError):
             continue
 
 
 def scan(root: Path, progress_cb: ProgressCb | None = None) -> list[MediaItem]:
-    """Walk root recursively; return every media file found.
-
-    progress_cb, if supplied, is invoked with the running count periodically.
-    """
+    """Walk root recursively; return every media file found."""
     items: list[MediaItem] = []
     for item in _iter_media(root):
         items.append(item)

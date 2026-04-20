@@ -1,8 +1,9 @@
-"""Builds the PlannedMove list that the executor will apply."""
+"""Builds the PlannedMove list from a cluster mapping (Group mode) or empty
+category (Flatten mode)."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Optional
 
@@ -22,7 +23,7 @@ Status = Literal[
 @dataclass
 class PlannedMove:
     item: MediaItem
-    category: str
+    category: str = ""
     dest_filename: str = ""
     dest_path: Optional[Path] = None
     hash_digest: Optional[str] = None
@@ -32,22 +33,17 @@ class PlannedMove:
 
 def build_plan(
     items: list[MediaItem],
-    mapping: dict[str, str],
+    folder_to_category: dict[str, str],
     destination_root: Path,
 ) -> list[PlannedMove]:
-    """Create one PlannedMove per MediaItem using the user-confirmed mapping.
+    """Map each item to a PlannedMove.
 
-    Destination filename + collision suffixing are resolved later by the
-    executor, because both depend on live filesystem state and hash results.
+    folder_to_category maps parent folder name → target category label.
+    An empty-string category routes the file to the destination root (Flatten
+    mode); a non-empty category routes it to <destination_root>/<category>/.
     """
     plan: list[PlannedMove] = []
     for item in items:
-        category = mapping.get(item.parent_folder, "Unsorted")
-        plan.append(
-            PlannedMove(
-                item=item,
-                category=category,
-                dest_path=destination_root / category,
-            )
-        )
+        category = folder_to_category.get(item.parent_folder, "")
+        plan.append(PlannedMove(item=item, category=category))
     return plan
