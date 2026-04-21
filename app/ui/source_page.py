@@ -1,4 +1,4 @@
-"""Source / destination picker with mode radio, similarity slider, drag-and-drop."""
+"""Source / destination picker with mode + action + drag-and-drop."""
 
 from __future__ import annotations
 
@@ -17,37 +17,33 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QSizePolicy,
-    QSlider,
     QSpacerItem,
     QVBoxLayout,
     QWidget,
 )
 
 from app.config import (
+    ACTION_COPY,
+    ACTION_MOVE,
     PROCESSING_MODE_FLATTEN,
     PROCESSING_MODE_GROUP,
-    SIMILARITY_MAX,
-    SIMILARITY_MIN,
-    SIMILARITY_THRESHOLD,
 )
 
 
 class _DropLineEdit(QLineEdit):
-    """A QLineEdit that accepts a dragged folder and sets its path as text."""
-
     def __init__(self, placeholder: str, parent=None) -> None:
         super().__init__(parent)
         self.setPlaceholderText(placeholder)
         self.setAcceptDrops(True)
-        self._default_style = self.styleSheet()
+        self._default_border: str = ""
 
     def _highlight(self, active: bool) -> None:
         if active:
             self.setStyleSheet(
-                "QLineEdit { border: 2px solid #2d7ef7; background: #eef5ff; }"
+                "QLineEdit { border: 2px solid #2563eb; background: #eff6ff; }"
             )
         else:
-            self.setStyleSheet(self._default_style)
+            self.setStyleSheet(self._default_border)
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         md = event.mimeData()
@@ -57,7 +53,7 @@ class _DropLineEdit(QLineEdit):
         else:
             event.ignore()
 
-    def dragLeaveEvent(self, event) -> None:  # noqa: D401
+    def dragLeaveEvent(self, event) -> None:
         self._highlight(False)
         super().dragLeaveEvent(event)
 
@@ -74,98 +70,115 @@ class _DropLineEdit(QLineEdit):
         event.ignore()
 
 
+def _make_card(title: str) -> tuple[QFrame, QVBoxLayout]:
+    frame = QFrame()
+    frame.setProperty("role", "card")
+    frame.setFrameShape(QFrame.Shape.NoFrame)
+    layout = QVBoxLayout(frame)
+    layout.setContentsMargins(18, 14, 18, 16)
+    layout.setSpacing(6)
+    title_label = QLabel(title)
+    title_label.setProperty("role", "sectionTitle")
+    layout.addWidget(title_label)
+    return frame, layout
+
+
 class SourcePage(QWidget):
-    scan_requested = pyqtSignal(Path, Path, str, float)  # src, dst, mode, threshold
+    # src, dst, mode, action
+    scan_requested = pyqtSignal(Path, Path, str, str)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._build_ui()
 
     def _build_ui(self) -> None:
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(28, 28, 28, 28)
-        layout.setSpacing(16)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(32, 28, 32, 28)
+        outer.setSpacing(18)
 
         title = QLabel("Semantic File Aggregator")
-        title.setStyleSheet("font-size: 22px; font-weight: 600;")
+        title.setProperty("role", "title")
         subtitle = QLabel(
-            "Flatten deeply nested media archives, or dynamically group them "
-            "into AI-discovered event folders. Preserves every unique byte."
+            "Pick a source folder, a destination, and how you want things "
+            "sorted. Originals stay untouched unless you choose Move."
         )
+        subtitle.setProperty("role", "subtitle")
         subtitle.setWordWrap(True)
-        subtitle.setStyleSheet("color: #555;")
-        layout.addWidget(title)
-        layout.addWidget(subtitle)
+        outer.addWidget(title)
+        outer.addWidget(subtitle)
 
-        mode_box = QFrame()
-        mode_box.setFrameShape(QFrame.Shape.StyledPanel)
-        mode_layout = QVBoxLayout(mode_box)
-        mode_layout.setContentsMargins(14, 10, 14, 14)
-        mode_label = QLabel("Processing mode")
-        mode_label.setStyleSheet("font-weight: 600;")
-        mode_layout.addWidget(mode_label)
-
-        self._mode_group_radio = QRadioButton("Dynamic Grouping  (recommended)")
+        # Mode card
+        mode_card, mode_layout = _make_card("Processing mode")
+        self._mode_group_radio = QRadioButton(
+            "Folder picker  —  review every folder name, tick which to keep as categories"
+        )
         self._mode_group_radio.setChecked(True)
-        self._mode_flatten_radio = QRadioButton("Flatten All")
+        self._mode_flatten_radio = QRadioButton(
+            "Flatten All  —  every file lands in the destination root, no subfolders"
+        )
         mode_layout.addWidget(self._mode_group_radio)
         mode_layout.addWidget(self._mode_flatten_radio)
-
         self._mode_group = QButtonGroup(self)
         self._mode_group.addButton(self._mode_group_radio)
         self._mode_group.addButton(self._mode_flatten_radio)
+        outer.addWidget(mode_card)
 
-        self._slider_row = QWidget()
-        slider_row_layout = QHBoxLayout(self._slider_row)
-        slider_row_layout.setContentsMargins(18, 4, 4, 0)
-        slider_row_layout.addWidget(QLabel("Similarity threshold:"))
-        self._slider = QSlider(Qt.Orientation.Horizontal)
-        self._slider.setRange(int(SIMILARITY_MIN), int(SIMILARITY_MAX))
-        self._slider.setValue(int(SIMILARITY_THRESHOLD))
-        self._slider.setTickPosition(QSlider.TickPosition.TicksBelow)
-        self._slider.setTickInterval(5)
-        self._slider_value = QLabel(f"{int(SIMILARITY_THRESHOLD)}")
-        self._slider_value.setMinimumWidth(28)
-        self._slider.valueChanged.connect(
-            lambda v: self._slider_value.setText(str(v))
+        # Action card
+        action_card, action_layout = _make_card("Action")
+        self._action_copy_radio = QRadioButton(
+            "Copy  —  originals stay where they are (recommended)"
         )
-        slider_row_layout.addWidget(self._slider, stretch=1)
-        slider_row_layout.addWidget(self._slider_value)
-        mode_layout.addWidget(self._slider_row)
+        self._action_copy_radio.setChecked(True)
+        self._action_move_radio = QRadioButton(
+            "Move  —  source files are deleted after each copy is hash-verified"
+        )
+        action_layout.addWidget(self._action_copy_radio)
+        action_layout.addWidget(self._action_move_radio)
+        self._action_group = QButtonGroup(self)
+        self._action_group.addButton(self._action_copy_radio)
+        self._action_group.addButton(self._action_move_radio)
+        outer.addWidget(action_card)
 
-        self._mode_group_radio.toggled.connect(self._on_mode_changed)
-        layout.addWidget(mode_box)
+        # Folder pickers card
+        paths_card, paths_layout = _make_card("Folders")
+        paths_layout.setSpacing(10)
 
-        self._source_edit = _DropLineEdit("Drop or browse the source folder…")
+        self._source_edit = _DropLineEdit("Drop a folder here, or browse…")
         source_btn = QPushButton("Browse…")
         source_btn.clicked.connect(self._pick_source)
         src_row = QHBoxLayout()
-        src_row.addWidget(QLabel("Source:     "))
+        src_row.addWidget(self._labeled("Source"))
         src_row.addWidget(self._source_edit, stretch=1)
         src_row.addWidget(source_btn)
-        layout.addLayout(src_row)
+        paths_layout.addLayout(src_row)
 
-        self._dest_edit = _DropLineEdit("Drop or browse the destination folder…")
+        self._dest_edit = _DropLineEdit("Drop a folder here, or browse…")
         dest_btn = QPushButton("Browse…")
         dest_btn.clicked.connect(self._pick_dest)
         dst_row = QHBoxLayout()
-        dst_row.addWidget(QLabel("Destination:"))
+        dst_row.addWidget(self._labeled("Destination"))
         dst_row.addWidget(self._dest_edit, stretch=1)
         dst_row.addWidget(dest_btn)
-        layout.addLayout(dst_row)
+        paths_layout.addLayout(dst_row)
 
-        layout.addItem(
+        outer.addWidget(paths_card)
+
+        outer.addItem(
             QSpacerItem(0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
         )
 
         scan_btn = QPushButton("Scan")
         scan_btn.setDefault(True)
-        scan_btn.setMinimumHeight(38)
+        scan_btn.setMinimumHeight(40)
+        scan_btn.setMinimumWidth(120)
         scan_btn.clicked.connect(self._emit_scan)
-        layout.addWidget(scan_btn, alignment=Qt.AlignmentFlag.AlignRight)
+        outer.addWidget(scan_btn, alignment=Qt.AlignmentFlag.AlignRight)
 
-    def _on_mode_changed(self, _checked: bool) -> None:
-        self._slider_row.setEnabled(self._mode_group_radio.isChecked())
+    @staticmethod
+    def _labeled(text: str) -> QLabel:
+        label = QLabel(text)
+        label.setMinimumWidth(86)
+        return label
 
     def _pick_source(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "Select source folder")
@@ -217,5 +230,7 @@ class SourcePage(QWidget):
             if self._mode_group_radio.isChecked()
             else PROCESSING_MODE_FLATTEN
         )
-        threshold = float(self._slider.value())
-        self.scan_requested.emit(src, dst, mode, threshold)
+        action = (
+            ACTION_COPY if self._action_copy_radio.isChecked() else ACTION_MOVE
+        )
+        self.scan_requested.emit(src, dst, mode, action)

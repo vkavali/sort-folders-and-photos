@@ -13,8 +13,12 @@ from app.config import MEDIA_EXTENSIONS
 @dataclass(frozen=True)
 class MediaItem:
     source_path: Path
-    parent_folder: str
+    ancestors: tuple[str, ...]   # folder names from source_root (exclusive) down to immediate parent
     size_bytes: int
+
+    @property
+    def parent_folder(self) -> str:
+        return self.ancestors[-1] if self.ancestors else ""
 
     @property
     def extension(self) -> str:
@@ -25,22 +29,25 @@ ProgressCb = Callable[[int], None]
 
 
 def _iter_media(root: Path) -> Iterator[MediaItem]:
-    stack: list[Path] = [root]
+    root = root.resolve()
+    stack: list[tuple[Path, tuple[str, ...]]] = [(root, tuple())]
     while stack:
-        current = stack.pop()
+        current, ancestors = stack.pop()
         try:
             with os.scandir(current) as it:
                 for entry in it:
                     try:
                         if entry.is_dir(follow_symlinks=False):
-                            stack.append(Path(entry.path))
+                            stack.append(
+                                (Path(entry.path), ancestors + (entry.name,))
+                            )
                         elif entry.is_file(follow_symlinks=False):
                             ext = os.path.splitext(entry.name)[1].lower()
                             if ext in MEDIA_EXTENSIONS:
                                 stat = entry.stat(follow_symlinks=False)
                                 yield MediaItem(
                                     source_path=Path(entry.path),
-                                    parent_folder=current.name,
+                                    ancestors=ancestors,
                                     size_bytes=stat.st_size,
                                 )
                     except (PermissionError, FileNotFoundError, OSError):

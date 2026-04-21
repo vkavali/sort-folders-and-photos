@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-from collections import Counter
 from pathlib import Path
 from typing import Optional
 
-from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QMainWindow,
     QMessageBox,
@@ -14,12 +12,9 @@ from PyQt6.QtWidgets import (
     QStatusBar,
 )
 
-from app.config import (
-    PROCESSING_MODE_FLATTEN,
-    PROCESSING_MODE_GROUP,
-    SIMILARITY_THRESHOLD,
-)
-from app.engine.clusterer import Cluster, cluster_folders, merge_clusters
+from app.config import ACTION_COPY, PROCESSING_MODE_FLATTEN, PROCESSING_MODE_GROUP
+from app.engine.pathindex import FolderEntry, FolderPick
+from app.engine.planner import build_plan, build_plan_from_picks
 from app.engine.scanner import MediaItem
 from app.workers import ProcessWorker, ScanWorker
 from app.ui.source_page import SourcePage
@@ -32,7 +27,7 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Semantic File Aggregator")
-        self.resize(960, 640)
+        self.resize(1040, 700)
 
         self._stack = QStackedWidget()
         self.setCentralWidget(self._stack)
@@ -42,7 +37,6 @@ class MainWindow(QMainWindow):
         self._mapping_page = MappingPage()
         self._progress_page = ProgressPage()
         self._summary_page = SummaryPage()
-
         for page in (
             self._source_page,
             self._mapping_page,
@@ -52,9 +46,7 @@ class MainWindow(QMainWindow):
             self._stack.addWidget(page)
 
         self._source_page.scan_requested.connect(self._on_scan_requested)
-        self._mapping_page.start_processing.connect(self._on_start_processing)
-        self._mapping_page.recluster_requested.connect(self._on_recluster)
-        self._mapping_page.merge_requested.connect(self._on_merge)
+        self._mapping_page.start_processing.connect(self._on_start_with_picks)
         self._progress_page.cancel_requested.connect(self._on_cancel)
         self._summary_page.done.connect(self._on_done)
 
@@ -64,19 +56,19 @@ class MainWindow(QMainWindow):
         self._source_root: Optional[Path] = None
         self._destination_root: Optional[Path] = None
         self._mode: str = PROCESSING_MODE_GROUP
-        self._similarity_threshold: float = SIMILARITY_THRESHOLD
+        self._action: str = ACTION_COPY
         self._items: list[MediaItem] = []
-        self._clusters: list[Cluster] = []
+        self._folder_entries: list[FolderEntry] = []
 
     def _on_scan_requested(
-        self, source: Path, destination: Path, mode: str, threshold: float
+        self, source: Path, destination: Path, mode: str, action: str
     ) -> None:
         self._source_root = source
         self._destination_root = destination
         self._mode = mode
-        self._similarity_threshold = threshold
+        self._action = action
         self.statusBar().showMessage(f"Scanning {source}…")
-        self._scan_worker = ScanWorker(source, mode=mode, similarity_threshold=threshold)
+        self._scan_worker = ScanWorker(source)
         self._scan_worker.progress.connect(
             lambda n: self.statusBar().showMessage(f"Scanning… {n} files")
         )
@@ -84,58 +76,51 @@ class MainWindow(QMainWindow):
         self._scan_worker.error.connect(self._on_worker_error)
         self._scan_worker.start()
 
-    def _on_scan_done(self, items: list[MediaItem], clusters: list[Cluster]) -> None:
+    def _on_scan_done(
+        self, items: list[MediaItem], folder_entries: list[FolderEntry]
+    ) -> None:
         self._items = items
-        self._clusters = clusters
-        self.statusBar().showMessage(
-            f"{len(items)} media files discovered across "
-            f"{len({i.parent_folder for i in items})} folders."
-        )
+        self._folder_entries = folder_entries
         if not items:
             QMessageBox.information(
                 self, "Nothing found", "No supported media files were found."
             )
+            self.statusBar().showMessage("Scan complete — no media files found.")
             return
-
+        self.statusBar().showMessage(
+            f"{len(items)} media files discovered in "
+            f"{len(folder_entries)} unique folder names."
+        )
         if self._mode == PROCESSING_MODE_FLATTEN:
-            mapping = {item.parent_folder: "" for item in items}
-            self._start_processing_with_mapping(mapping)
+            self._run_flatten()
             return
-
-        self._mapping_page.set_clusters(clusters, self._similarity_threshold)
+        self._mapping_page.set_entries(folder_entries)
         self._stack.setCurrentWidget(self._mapping_page)
 
-    def _on_recluster(self, threshold: float) -> None:
-        self._similarity_threshold = threshold
-        if not self._items:
+    def _run_flatten(self) -> None:
+        if not self._destination_root:
             return
-        counts = Counter(item.parent_folder for item in self._items)
-        self._clusters = cluster_folders(counts.items(), threshold=threshold)
-        self._mapping_page.set_clusters(self._clusters, threshold)
-
-    def _on_merge(self, ids: list[int], target_id: object) -> None:
-        if not self._clusters or len(ids) < 2:
-            return
-        ordered = list(dict.fromkeys(ids))
-        if isinstance(target_id, int) and target_id in ordered:
-            ordered.remove(target_id)
-            ordered.insert(0, target_id)
-        survivor_label = next(
-            (c.label for c in self._clusters if c.id == ordered[0]), None
-        )
-        self._clusters = merge_clusters(self._clusters, ordered, new_label=survivor_label)
-        self._mapping_page.set_clusters(self._clusters, self._similarity_threshold)
-
-    def _on_start_processing(self, mapping: dict[str, str]) -> None:
-        self._start_processing_with_mapping(mapping)
-
-    def _start_processing_with_mapping(self, mapping: dict[str, str]) -> None:
-        if self._destination_root is None:
-            return
-        self._progress_page.reset(len(self._items))
+        mapping = {item.parent_folder: "" for item in self._items}
+        plan = build_plan(self._items, mapping, self._destination_root)
+        self._progress_page.reset(len(plan))
         self._stack.setCurrentWidget(self._progress_page)
         self._process_worker = ProcessWorker(
-            self._items, mapping, self._destination_root
+            plan, self._destination_root, action=self._action
+        )
+        self._process_worker.progress.connect(self._progress_page.set_progress)
+        self._process_worker.log.connect(self._progress_page.append_log)
+        self._process_worker.finished_stats.connect(self._on_process_finished)
+        self._process_worker.error.connect(self._on_worker_error)
+        self._process_worker.start()
+
+    def _on_start_with_picks(self, picks: list[FolderPick]) -> None:
+        if not self._destination_root:
+            return
+        plan = build_plan_from_picks(self._items, picks, self._destination_root)
+        self._progress_page.reset(len(plan))
+        self._stack.setCurrentWidget(self._progress_page)
+        self._process_worker = ProcessWorker(
+            plan, self._destination_root, action=self._action
         )
         self._process_worker.progress.connect(self._progress_page.set_progress)
         self._process_worker.log.connect(self._progress_page.append_log)
@@ -153,7 +138,7 @@ class MainWindow(QMainWindow):
     def _on_process_finished(self, stats) -> None:
         self.statusBar().showMessage("Done.")
         assert self._destination_root is not None
-        self._summary_page.set_result(stats, self._destination_root)
+        self._summary_page.set_result(stats, self._destination_root, self._action)
         self._stack.setCurrentWidget(self._summary_page)
 
     def _on_worker_error(self, message: str) -> None:
@@ -161,5 +146,5 @@ class MainWindow(QMainWindow):
 
     def _on_done(self) -> None:
         self._items.clear()
-        self._clusters.clear()
+        self._folder_entries.clear()
         self._stack.setCurrentWidget(self._source_page)

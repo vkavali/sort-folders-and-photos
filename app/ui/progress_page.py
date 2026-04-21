@@ -23,34 +23,34 @@ class ProgressPage(QWidget):
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(10)
+        layout.setContentsMargins(32, 24, 32, 24)
+        layout.setSpacing(12)
 
         header = QLabel("Processing…")
-        header.setStyleSheet("font-size: 18px; font-weight: 600;")
+        header.setProperty("role", "title")
         layout.addWidget(header)
 
         self._counter = QLabel("0 / 0")
-        self._counter.setStyleSheet("color: #555;")
+        self._counter.setProperty("role", "subtitle")
         layout.addWidget(self._counter)
 
         self._bar = QProgressBar()
         self._bar.setRange(0, 1)
         self._bar.setValue(0)
+        self._bar.setTextVisible(True)
+        self._bar.setFixedHeight(16)
         layout.addWidget(self._bar)
 
         self._log = QPlainTextEdit()
         self._log.setReadOnly(True)
         self._log.setMaximumBlockCount(5000)
-        self._log.setStyleSheet(
-            "QPlainTextEdit { font-family: Consolas, 'Courier New', monospace; "
-            "font-size: 11px; background: #111; color: #ddd; }"
-        )
         layout.addWidget(self._log, stretch=1)
 
         bar = QHBoxLayout()
         bar.addStretch(1)
         self._cancel_btn = QPushButton("Cancel")
+        self._cancel_btn.setMinimumWidth(120)
+        self._cancel_btn.setMinimumHeight(36)
         self._cancel_btn.clicked.connect(self._on_cancel)
         bar.addWidget(self._cancel_btn)
         layout.addLayout(bar)

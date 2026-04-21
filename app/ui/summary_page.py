@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from app.config import ACTION_MOVE
 from app.engine.executor import ExecutionStats
 
 
@@ -32,28 +33,36 @@ class SummaryPage(QWidget):
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(28, 28, 28, 28)
-        layout.setSpacing(14)
+        layout.setContentsMargins(32, 28, 32, 28)
+        layout.setSpacing(16)
 
-        header = QLabel("All done.")
-        header.setStyleSheet("font-size: 22px; font-weight: 600;")
-        layout.addWidget(header)
+        self._title = QLabel("All done.")
+        self._title.setObjectName("summaryTitle")
+        layout.addWidget(self._title)
+
+        tagline = QLabel("Every unique byte was preserved. Duplicates were isolated, not dropped.")
+        tagline.setProperty("role", "subtitle")
+        tagline.setWordWrap(True)
+        layout.addWidget(tagline)
 
         panel = QFrame()
-        panel.setFrameShape(QFrame.Shape.StyledPanel)
+        panel.setObjectName("summaryPanel")
+        panel.setProperty("role", "card")
+        panel.setFrameShape(QFrame.Shape.NoFrame)
         form = QFormLayout(panel)
-        form.setContentsMargins(20, 18, 20, 18)
-        form.setSpacing(8)
+        form.setContentsMargins(22, 18, 22, 18)
+        form.setSpacing(10)
 
         self._total = QLabel("0")
-        self._moved = QLabel("0")
+        self._primary_label = QLabel("Copied:")
+        self._primary = QLabel("0")
         self._duplicates = QLabel("0")
         self._collisions = QLabel("0")
         self._errors = QLabel("0")
         self._skipped = QLabel("0")
         for label in (
             self._total,
-            self._moved,
+            self._primary,
             self._duplicates,
             self._collisions,
             self._errors,
@@ -62,7 +71,7 @@ class SummaryPage(QWidget):
             label.setStyleSheet("font-weight: 600;")
 
         form.addRow("Total files discovered:", self._total)
-        form.addRow("Moved:", self._moved)
+        form.addRow(self._primary_label, self._primary)
         form.addRow("Duplicates isolated:", self._duplicates)
         form.addRow("Name collisions renamed:", self._collisions)
         form.addRow("Errors:", self._errors)
@@ -73,18 +82,28 @@ class SummaryPage(QWidget):
 
         btn_row = QHBoxLayout()
         self._open_btn = QPushButton("Open Destination")
+        self._open_btn.setMinimumHeight(36)
         self._open_btn.clicked.connect(self._open_destination)
         btn_row.addWidget(self._open_btn)
         btn_row.addStretch(1)
         done_btn = QPushButton("Done")
         done_btn.setDefault(True)
+        done_btn.setMinimumHeight(36)
+        done_btn.setMinimumWidth(120)
         done_btn.clicked.connect(self.done.emit)
         btn_row.addWidget(done_btn)
         layout.addLayout(btn_row)
 
-    def set_result(self, stats: ExecutionStats, destination: Path) -> None:
+    def set_result(
+        self, stats: ExecutionStats, destination: Path, action: str
+    ) -> None:
         self._total.setText(str(stats.total))
-        self._moved.setText(str(stats.moved))
+        if action == ACTION_MOVE:
+            self._primary_label.setText("Moved:")
+            self._primary.setText(str(stats.moved))
+        else:
+            self._primary_label.setText("Copied:")
+            self._primary.setText(str(stats.copied))
         self._duplicates.setText(str(stats.duplicates))
         self._collisions.setText(str(stats.collisions_renamed))
         self._errors.setText(str(stats.errors))

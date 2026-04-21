@@ -1,16 +1,12 @@
-"""Generate a deliberately messy, taxonomy-agnostic test tree for self-verification.
+"""Generate a deliberately messy nested media tree for self-verification.
 
-Run from the repository root:
-    python3 generate_test_data.py [--root PATH]
+The layout mirrors what a real wedding export looks like (multiple
+top-level timestamped containers, each holding the same named event
+subfolders). Uses tiny 2x2 PNGs so EXIF-less branches exercise the
+mtime fallback and hash-dedup logic.
 
-Creates:
-  <root>/source/        — messy nested tree to be processed.
-  <root>/destination/   — empty target folder for the app to write into.
-
-The produced images are real JPEGs (2×2 pixels) so that EXIF extraction can
-succeed where EXIF is present and fall back to mtime otherwise. Duplicate
-files share byte-for-byte content; collision files share a filename but have
-different bytes.
+Run:
+    python generate_test_data.py [--root _test_tree]
 """
 
 from __future__ import annotations
@@ -41,8 +37,6 @@ def _png_bytes(color: tuple[int, int, int]) -> bytes:
 
 
 def _fake_mp4_bytes(marker: bytes) -> bytes:
-    # Minimal ISO-BMFF header so extension sniffing is harmless; content is
-    # irrelevant to our tool, which treats mp4 as "no EXIF → use mtime".
     ftyp = (
         struct.pack(">I", 20)
         + b"ftyp"
@@ -71,51 +65,68 @@ def build_tree(root: Path) -> None:
 
     base_time = datetime(2024, 6, 1, 9, 0, 0)
 
-    jpg_alpha1 = _jpeg_bytes((230, 40, 40))
-    jpg_alpha2 = _jpeg_bytes((40, 200, 40))
-    jpg_alpha3 = _jpeg_bytes((40, 40, 230))
-    jpg_bravo = _jpeg_bytes((200, 200, 0))
-    jpg_bravo_extra = _jpeg_bytes((0, 200, 200))
-    png_note = _png_bytes((120, 120, 120))
-    mp4_clip = _fake_mp4_bytes(b"CLIP1")
+    # Distinct-content photos
+    haldi_1 = _jpeg_bytes((230, 200, 40))
+    haldi_2 = _jpeg_bytes((200, 180, 20))
+    sangeet_1 = _jpeg_bytes((30, 30, 200))
+    sangeet_2 = _jpeg_bytes((10, 10, 180))
+    reception_1 = _jpeg_bytes((200, 200, 200))
+    reception_dup = _jpeg_bytes((200, 200, 200))  # note: same bytes as reception_1
+    other_png = _png_bytes((120, 120, 120))
+    other_mp4 = _fake_mp4_bytes(b"CLIP1")
 
-    # alpha_raw + "Alpha Raw" + "Alpha-final" should all cluster together
+    # --- Google-Drive-export-looking timestamped top-level folders,
+    # each with the SAME named subfolders we want to merge across them. ---
+    #
+    # Day 1 batch
     _write(
-        source / "ProjectAlpha" / "alpha_raw" / "IMG_0001.JPG",
-        jpg_alpha1,
+        source / "Marriage-20260111T075732Z-3-001" / "Marriage" / "HALDI&SANGEETH"
+        / "PICS" / "IMG_0001.JPG",
+        haldi_1,
         base_time,
     )
     _write(
-        source / "ProjectAlpha" / "Alpha Raw" / "IMG_0002.JPG",
-        jpg_alpha2,
-        base_time + timedelta(minutes=2),
-    )
-    _write(
-        source / "ProjectAlpha" / "Alpha-final" / "IMG_0001.JPG",
-        jpg_alpha3,  # same name as the first one, DIFFERENT content
-        base_time + timedelta(minutes=5),
+        source / "Marriage-20260111T075732Z-3-001" / "Marriage" / "Marriage Selected"
+        / "DSC_9000.JPG",
+        reception_1,
+        base_time + timedelta(minutes=30),
     )
 
-    # bravo cluster with an exact duplicate
+    # Day 2 batch — same named subfolders, different content, plus a duplicate
     _write(
-        source / "ClientBravo" / "bravo_shoot_day1" / "DSC_9000.JPG",
-        jpg_bravo,
+        source / "Marriage-20260111T075732Z-3-002" / "Marriage" / "HALDI&SANGEETH"
+        / "PICS" / "IMG_0002.JPG",
+        haldi_2,
         base_time + timedelta(hours=1),
     )
     _write(
-        source / "ClientBravo" / "bravo_shoot_day1" / "DSC_9001.JPG",
-        jpg_bravo_extra,
-        base_time + timedelta(hours=1, minutes=3),
+        source / "Marriage-20260111T075732Z-3-002" / "Marriage" / "HALDI&SANGEETH"
+        / "PICS" / "IMG_SANGEET_1.JPG",
+        sangeet_1,
+        base_time + timedelta(hours=8),   # evening = Sangeet
     )
     _write(
-        source / "ClientBravo" / "Bravo Shoot Day 2" / "DSC_9000.JPG",
-        jpg_bravo,  # EXACT duplicate of the one above
+        source / "Marriage-20260111T075732Z-3-002" / "Marriage" / "HALDI&SANGEETH"
+        / "PICS" / "IMG_SANGEET_2.JPG",
+        sangeet_2,
+        base_time + timedelta(hours=9),   # evening = Sangeet
+    )
+    _write(
+        source / "Marriage-20260111T075732Z-3-002" / "Marriage" / "Marriage Selected"
+        / "DSC_9000.JPG",
+        reception_dup,    # EXACT duplicate of Day-1 reception_1
         base_time + timedelta(hours=25),
     )
+    _write(
+        source / "Marriage-20260111T075732Z-3-002" / "Marriage" / "Marriage Selected"
+        / "DSC_9001.JPG",
+        _jpeg_bytes((220, 220, 220)),
+        base_time + timedelta(hours=26),
+    )
 
-    # Singleton clusters
-    _write(source / "unrelated_notes" / "notes.png", png_note, base_time)
-    _write(source / "videos" / "clip1.mp4", mp4_clip, base_time + timedelta(hours=3))
+    # A non-Marriage branch to test ignored / Unsorted paths
+    _write(source / "unrelated_notes" / "notes.png", other_png, base_time)
+    _write(source / "videos" / "clip1.mp4", other_mp4, base_time + timedelta(hours=3))
 
     print(f"Built test tree at {root.resolve()}")
     print(f"  source:      {source}")

@@ -1,9 +1,13 @@
-"""Copy-then-verify-then-delete execution of a planned move list.
+"""Copy-or-move execution of a planned list with verify-by-hash safety.
 
-Supports both Flatten mode (PlannedMove.category == "") and Dynamic Grouping
-mode (category is a cluster label). Uses a size-prefilter: files with
-unique sizes skip hashing on the first pass and only hash if a size-peer
-appears at reservation time.
+Two user-selectable actions:
+  * "copy" (default) — source files are NEVER removed.
+  * "move"           — after the destination hash matches, the source file
+                       is deleted. Source directories are always preserved.
+
+Byte-size pre-filter: files with unique sizes mathematically cannot duplicate
+any peer in the batch and skip cryptographic hashing (they still verify by
+size after copying).
 """
 
 from __future__ import annotations
@@ -16,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
-from app.config import DUPLICATES_DIR
+from app.config import ACTION_COPY, ACTION_MOVE, DUPLICATES_DIR
 from app.engine.exif import extract_timestamp, format_timestamp
 from app.engine.hasher import file_digest
 from app.engine.planner import PlannedMove
@@ -30,6 +34,7 @@ LogCb = Callable[[str], None]
 class ExecutionStats:
     total: int = 0
     moved: int = 0
+    copied: int = 0
     duplicates: int = 0
     collisions_renamed: int = 0
     errors: int = 0
@@ -38,28 +43,18 @@ class ExecutionStats:
     def record(self, status: str) -> None:
         if status == "moved":
             self.moved += 1
+        elif status == "copied":
+            self.copied += 1
         elif status == "duplicate":
             self.duplicates += 1
-        elif status == "collision_renamed":
-            self.collisions_renamed += 1
-            self.moved += 1
         elif status == "error":
             self.errors += 1
         elif status == "skipped":
             self.skipped += 1
+        # collision_renamed is a *subcount* of copied/moved — caller adds it.
 
 
 class _ReservationLedger:
-    """Thread-safe unique-filename + hash-dedup registry.
-
-    The ledger serves two purposes:
-      1. Guarantee each destination filename is reserved atomically across
-         threads so two concurrent workers cannot settle on the same name.
-      2. Dedupe by digest within a destination folder: if a file with an
-         identical tagged digest was already placed there, the second caller
-         is told where the first landed.
-    """
-
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._hashes: dict[tuple[Path, str], Path] = {}
@@ -126,6 +121,7 @@ def _process_one(
     destination_root: Path,
     ledger: _ReservationLedger,
     size_peers: set[int],
+    action: str,
     log: LogCb,
 ) -> PlannedMove:
     try:
@@ -152,7 +148,9 @@ def _process_one(
             )
             dup_target = dup_dir / dup_final
             shutil.copy2(plan.item.source_path, dup_target)
-            _verify_and_remove(plan.item.source_path, dup_target, digest, size)
+            _verify(plan.item.source_path, dup_target, digest, size)
+            if action == ACTION_MOVE:
+                _remove_source(plan.item.source_path)
             plan.dest_filename = dup_final
             plan.dest_path = dup_target
             plan.status = "duplicate"
@@ -162,7 +160,9 @@ def _process_one(
 
         target = category_dir / final_name
         shutil.copy2(plan.item.source_path, target)
-        _verify_and_remove(plan.item.source_path, target, digest, size)
+        _verify(plan.item.source_path, target, digest, size)
+        if action == ACTION_MOVE:
+            _remove_source(plan.item.source_path)
         plan.dest_filename = final_name
         plan.dest_path = target
         if final_name != base_name:
@@ -170,9 +170,10 @@ def _process_one(
             plan.message = f"Name collided; renamed to {final_name}"
             log(f"[RENAMED]   {plan.item.source_path} -> {target}")
         else:
-            plan.status = "moved"
-            plan.message = "Moved successfully"
-            log(f"[MOVED]     {plan.item.source_path} -> {target}")
+            plan.status = "moved" if action == ACTION_MOVE else "copied"
+            plan.message = "Moved successfully" if action == ACTION_MOVE else "Copied successfully"
+            tag = "[MOVED]     " if action == ACTION_MOVE else "[COPIED]    "
+            log(f"{tag}{plan.item.source_path} -> {target}")
     except Exception as exc:
         plan.status = "error"
         plan.message = f"{type(exc).__name__}: {exc}"
@@ -180,15 +181,7 @@ def _process_one(
     return plan
 
 
-def _verify_and_remove(
-    source: Path, target: Path, expected_digest: str, source_size: int
-) -> None:
-    """Verify target integrity, then delete source FILE only.
-
-    We intentionally never delete source directories — even if empty. Empty
-    folders are left in place until the user inspects the run; this matches
-    the "copy-then-move with human-verifiable side effects" invariant.
-    """
+def _verify(source: Path, target: Path, expected_digest: str, source_size: int) -> None:
     if expected_digest.startswith("size-unique:"):
         try:
             if target.stat().st_size != source_size:
@@ -208,6 +201,8 @@ def _verify_and_remove(
                 f"expected {expected_digest}, got {actual}"
             )
 
+
+def _remove_source(source: Path) -> None:
     try:
         os.remove(source)
     except OSError:
@@ -215,12 +210,6 @@ def _verify_and_remove(
 
 
 def _build_size_peer_set(plan: list[PlannedMove]) -> set[int]:
-    """Return the set of file sizes that appear on ≥ 2 items.
-
-    Files with unique sizes are mathematically guaranteed not to be
-    duplicates of any other file in the batch and can skip the hash step
-    (we still verify the copy by size).
-    """
     sizes: dict[int, int] = {}
     for p in plan:
         sizes[p.item.size_bytes] = sizes.get(p.item.size_bytes, 0) + 1
@@ -231,6 +220,7 @@ def execute_plan(
     plan: list[PlannedMove],
     destination_root: Path,
     *,
+    action: str = ACTION_COPY,
     max_workers: int | None = None,
     file_done_cb: FileDoneCb | None = None,
     log_cb: LogCb | None = None,
@@ -258,7 +248,7 @@ def execute_plan(
                 emit_done(p)
                 continue
             fut = pool.submit(
-                _process_one, p, destination_root, ledger, size_peers, log
+                _process_one, p, destination_root, ledger, size_peers, action, log
             )
             futures[fut] = p
 
@@ -273,7 +263,11 @@ def execute_plan(
             if _is_cancelled(cancel_cb) and result.status == "pending":
                 result.status = "skipped"
                 result.message = "Cancelled mid-run"
-            stats.record(result.status)
+            if result.status == "collision_renamed":
+                stats.collisions_renamed += 1
+                stats.record("copied" if action == ACTION_COPY else "moved")
+            else:
+                stats.record(result.status)
             emit_done(result)
 
     return stats

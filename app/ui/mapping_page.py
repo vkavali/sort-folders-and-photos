@@ -1,224 +1,322 @@
-"""Cluster review page: table with editable labels, drag-drop merge, merge button."""
+"""Folder picker: every unique folder name in the tree is tickable.
+
+Ticked rows get a destination label and an optional list of time windows
+that further split the files by EXIF capture time.
+"""
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Iterable
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QDateTime, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
+    QDateTimeEdit,
+    QDialog,
+    QDialogButtonBox,
+    QFormLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QPushButton,
-    QSlider,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
-from app.config import SIMILARITY_MAX, SIMILARITY_MIN
-from app.engine.clusterer import Cluster
+from app.engine.pathindex import FolderEntry, FolderPick, TimeSplit
 
 
-class _ClusterTable(QTableWidget):
-    """Table with drag-and-drop row merging.
+_COL_USE = 0
+_COL_NAME = 1
+_COL_OCCUR = 2
+_COL_FILES = 3
+_COL_LABEL = 4
+_COL_SPLIT = 5
 
-    Dragging row A onto row B merges A into B (B's label survives).
-    """
 
-    rows_merged = pyqtSignal(int, int)  # dragged_cluster_id, target_cluster_id
+class TimeSplitDialog(QDialog):
+    """Edit time-window splits for one folder pick."""
 
-    def __init__(self, parent=None) -> None:
+    def __init__(
+        self,
+        folder_name: str,
+        default_label: str,
+        initial_splits: list[TimeSplit],
+        parent=None,
+    ) -> None:
         super().__init__(parent)
-        self.setColumnCount(4)
-        self.setHorizontalHeaderLabels(
-            ["Cluster Label", "Members", "File Count", "Avg Similarity"]
-        )
-        self.horizontalHeader().setStretchLastSection(False)
-        self.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        self.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        self.verticalHeader().setVisible(False)
-        self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.setEditTriggers(
-            QAbstractItemView.EditTrigger.DoubleClicked
-            | QAbstractItemView.EditTrigger.EditKeyPressed
-        )
-        self.setDragEnabled(True)
-        self.setAcceptDrops(True)
-        self.setDropIndicatorShown(True)
-        self.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.setWindowTitle(f"Time splits for '{folder_name}'")
+        self.resize(640, 360)
+        self._default_label = default_label
+        self._build_ui()
+        for split in initial_splits:
+            self._add_row(split)
 
-    def dropEvent(self, event) -> None:  # type: ignore[override]
-        src_row = self.currentRow()
-        target_row = self.rowAt(event.position().toPoint().y())
-        if src_row < 0 or target_row < 0 or src_row == target_row:
-            event.ignore()
-            return
-        src_id_item = self.item(src_row, 0)
-        tgt_id_item = self.item(target_row, 0)
-        if src_id_item is None or tgt_id_item is None:
-            event.ignore()
-            return
-        src_id = src_id_item.data(Qt.ItemDataRole.UserRole)
-        tgt_id = tgt_id_item.data(Qt.ItemDataRole.UserRole)
-        event.setDropAction(Qt.DropAction.IgnoreAction)
-        event.accept()
-        if isinstance(src_id, int) and isinstance(tgt_id, int):
-            self.rows_merged.emit(src_id, tgt_id)
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        info = QLabel(
+            "Route photos inside this folder by their EXIF capture time. "
+            "Files are assigned to the first matching window; files with no "
+            "matching window use the folder's default destination."
+        )
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        self._table = QTableWidget(0, 3)
+        self._table.setHorizontalHeaderLabels(
+            ["Start (inclusive)", "End (exclusive)", "Destination label"]
+        )
+        self._table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Stretch
+        )
+        self._table.verticalHeader().setVisible(False)
+        layout.addWidget(self._table, stretch=1)
+
+        btn_row = QHBoxLayout()
+        add_btn = QPushButton("Add window")
+        add_btn.clicked.connect(lambda: self._add_row())
+        remove_btn = QPushButton("Remove selected")
+        remove_btn.clicked.connect(self._remove_selected)
+        btn_row.addWidget(add_btn)
+        btn_row.addWidget(remove_btn)
+        btn_row.addStretch(1)
+        layout.addLayout(btn_row)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _add_row(self, split: TimeSplit | None = None) -> None:
+        row = self._table.rowCount()
+        self._table.insertRow(row)
+
+        start = QDateTimeEdit()
+        start.setDisplayFormat("yyyy-MM-dd HH:mm")
+        start.setCalendarPopup(True)
+        if split and split.start is not None:
+            start.setDateTime(QDateTime(split.start))
+        else:
+            start.setDateTime(QDateTime.currentDateTime().addDays(-1))
+        self._table.setCellWidget(row, 0, start)
+
+        end = QDateTimeEdit()
+        end.setDisplayFormat("yyyy-MM-dd HH:mm")
+        end.setCalendarPopup(True)
+        if split and split.end is not None:
+            end.setDateTime(QDateTime(split.end))
+        else:
+            end.setDateTime(QDateTime.currentDateTime())
+        self._table.setCellWidget(row, 1, end)
+
+        label = QLineEdit(split.destination_label if split else self._default_label)
+        self._table.setCellWidget(row, 2, label)
+
+    def _remove_selected(self) -> None:
+        rows = sorted({idx.row() for idx in self._table.selectedIndexes()}, reverse=True)
+        for r in rows:
+            self._table.removeRow(r)
+
+    def splits(self) -> list[TimeSplit]:
+        result: list[TimeSplit] = []
+        for row in range(self._table.rowCount()):
+            start_widget = self._table.cellWidget(row, 0)
+            end_widget = self._table.cellWidget(row, 1)
+            label_widget = self._table.cellWidget(row, 2)
+            if not start_widget or not end_widget or not label_widget:
+                continue
+            start: datetime = start_widget.dateTime().toPyDateTime()  # type: ignore[attr-defined]
+            end: datetime = end_widget.dateTime().toPyDateTime()  # type: ignore[attr-defined]
+            label = label_widget.text().strip()  # type: ignore[attr-defined]
+            if not label:
+                continue
+            result.append(TimeSplit(start=start, end=end, destination_label=label))
+        return result
 
 
 class MappingPage(QWidget):
-    start_processing = pyqtSignal(dict)         # folder_name -> category_label
-    recluster_requested = pyqtSignal(float)     # new threshold
-    merge_requested = pyqtSignal(list, object)  # list[ids], target_id | None
+    start_processing = pyqtSignal(list)   # list[FolderPick]
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self._clusters: list[Cluster] = []
+        self._entries: list[FolderEntry] = []
+        # Keep per-folder-name split config separate from the table widget state
+        self._time_splits: dict[str, list[TimeSplit]] = {}
         self._build_ui()
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(12)
+        layout.setContentsMargins(32, 24, 32, 24)
+        layout.setSpacing(14)
 
-        header = QLabel("Review discovered categories")
-        header.setStyleSheet("font-size: 18px; font-weight: 600;")
+        header = QLabel("Pick which folders to keep as categories")
+        header.setProperty("role", "title")
         sub = QLabel(
-            "Edit any cluster label inline. Select 2+ rows and click Merge, "
-            "or drag one row onto another to merge it in. Adjust the "
-            "similarity threshold and click Re-cluster to regroup."
+            "Every unique folder name discovered in your source tree is listed "
+            "below. Tick the ones that should become destination folders. "
+            "Files are routed to their deepest ticked ancestor. Click "
+            "Time splits to further split a folder by EXIF capture time."
         )
+        sub.setProperty("role", "subtitle")
         sub.setWordWrap(True)
-        sub.setStyleSheet("color: #555;")
         layout.addWidget(header)
         layout.addWidget(sub)
 
-        self._table = _ClusterTable()
-        self._table.rows_merged.connect(self._on_rows_merged)
+        self._table = QTableWidget(0, 6)
+        self._table.setHorizontalHeaderLabels(
+            ["Use", "Folder name", "Occurrences", "Photos under it",
+             "Destination label", "Time splits"]
+        )
+        self._table.horizontalHeader().setSectionResizeMode(
+            _COL_NAME, QHeaderView.ResizeMode.Stretch
+        )
+        self._table.horizontalHeader().setSectionResizeMode(
+            _COL_LABEL, QHeaderView.ResizeMode.Stretch
+        )
+        for c in (_COL_USE, _COL_OCCUR, _COL_FILES, _COL_SPLIT):
+            self._table.horizontalHeader().setSectionResizeMode(
+                c, QHeaderView.ResizeMode.ResizeToContents
+            )
+        self._table.verticalHeader().setVisible(False)
+        self._table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
         layout.addWidget(self._table, stretch=1)
 
         toolbar = QHBoxLayout()
-        self._merge_btn = QPushButton("Merge Selected")
-        self._merge_btn.clicked.connect(self._on_merge_clicked)
-        toolbar.addWidget(self._merge_btn)
-
-        toolbar.addSpacing(16)
-        toolbar.addWidget(QLabel("Re-cluster at"))
-        self._slider = QSlider(Qt.Orientation.Horizontal)
-        self._slider.setRange(int(SIMILARITY_MIN), int(SIMILARITY_MAX))
-        self._slider.setFixedWidth(160)
-        self._slider_value = QLabel("")
-        self._slider.valueChanged.connect(
-            lambda v: self._slider_value.setText(str(v))
-        )
-        toolbar.addWidget(self._slider)
-        toolbar.addWidget(self._slider_value)
-        recluster_btn = QPushButton("Re-cluster")
-        recluster_btn.clicked.connect(
-            lambda: self.recluster_requested.emit(float(self._slider.value()))
-        )
-        toolbar.addWidget(recluster_btn)
-
+        toolbar.setSpacing(8)
+        select_all = QPushButton("Select all")
+        select_all.clicked.connect(lambda: self._set_all_checked(True))
+        toolbar.addWidget(select_all)
+        deselect_all = QPushButton("Deselect all")
+        deselect_all.clicked.connect(lambda: self._set_all_checked(False))
+        toolbar.addWidget(deselect_all)
+        restore = QPushButton("Restore suggestions")
+        restore.clicked.connect(self._restore_suggestions)
+        toolbar.addWidget(restore)
         toolbar.addStretch(1)
         start_btn = QPushButton("Start Processing")
         start_btn.setDefault(True)
-        start_btn.setMinimumHeight(34)
+        start_btn.setMinimumHeight(38)
+        start_btn.setMinimumWidth(160)
         start_btn.clicked.connect(self._emit_start)
         toolbar.addWidget(start_btn)
-
         layout.addLayout(toolbar)
 
-    def set_clusters(self, clusters: Iterable[Cluster], threshold: float) -> None:
-        self._clusters = list(clusters)
-        self._slider.setValue(int(threshold))
-        self._slider_value.setText(str(int(threshold)))
+    def set_entries(self, entries: Iterable[FolderEntry]) -> None:
+        self._entries = list(entries)
+        self._time_splits.clear()
         self._refresh_table()
 
     def _refresh_table(self) -> None:
-        self._table.blockSignals(True)
         self._table.setRowCount(0)
-        for cluster in self._clusters:
+        for entry in self._entries:
             row = self._table.rowCount()
             self._table.insertRow(row)
 
-            label_item = QTableWidgetItem(cluster.label)
-            label_item.setData(Qt.ItemDataRole.UserRole, cluster.id)
-            label_item.setFlags(
-                label_item.flags() | Qt.ItemFlag.ItemIsEditable
+            use_cell = QWidget()
+            use_layout = QHBoxLayout(use_cell)
+            use_layout.setContentsMargins(0, 0, 0, 0)
+            use_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            cb = QCheckBox()
+            cb.setChecked(entry.auto_suggested)
+            use_layout.addWidget(cb)
+            self._table.setCellWidget(row, _COL_USE, use_cell)
+
+            name_item = QTableWidgetItem(entry.name)
+            name_item.setFlags(name_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            name_item.setData(Qt.ItemDataRole.UserRole, entry.name)
+            self._table.setItem(row, _COL_NAME, name_item)
+
+            occ_item = QTableWidgetItem(str(entry.occurrences))
+            occ_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            occ_item.setFlags(occ_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self._table.setItem(row, _COL_OCCUR, occ_item)
+
+            files_item = QTableWidgetItem(str(entry.file_count))
+            files_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            files_item.setFlags(files_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self._table.setItem(row, _COL_FILES, files_item)
+
+            label_edit = QLineEdit(entry.name)
+            self._table.setCellWidget(row, _COL_LABEL, label_edit)
+
+            split_btn = QPushButton("Time splits…")
+            split_btn.clicked.connect(
+                lambda _checked=False, r=row: self._edit_splits(r)
             )
+            self._table.setCellWidget(row, _COL_SPLIT, split_btn)
 
-            members_item = QTableWidgetItem(", ".join(cluster.members))
-            members_item.setFlags(
-                members_item.flags() & ~Qt.ItemFlag.ItemIsEditable
-            )
-            members_item.setToolTip("\n".join(cluster.members))
-
-            count_item = QTableWidgetItem(str(cluster.file_count))
-            count_item.setFlags(count_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            count_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-
-            sim_item = QTableWidgetItem(f"{cluster.avg_internal_similarity:.1f}")
-            sim_item.setFlags(sim_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            sim_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-
-            self._table.setItem(row, 0, label_item)
-            self._table.setItem(row, 1, members_item)
-            self._table.setItem(row, 2, count_item)
-            self._table.setItem(row, 3, sim_item)
-        self._table.blockSignals(False)
-
-    def _selected_cluster_ids(self) -> list[int]:
-        ids: list[int] = []
-        seen: set[int] = set()
-        for idx in self._table.selectedIndexes():
-            row = idx.row()
-            if row in seen:
-                continue
-            seen.add(row)
-            item = self._table.item(row, 0)
-            if item is not None:
-                cid = item.data(Qt.ItemDataRole.UserRole)
-                if isinstance(cid, int):
-                    ids.append(cid)
-        return ids
-
-    def _on_merge_clicked(self) -> None:
-        ids = self._selected_cluster_ids()
-        if len(ids) < 2:
-            QMessageBox.information(
-                self,
-                "Select at least two clusters",
-                "Highlight two or more rows to merge. The label of the "
-                "first-selected (top-most) row will survive.",
-            )
-            return
-        self.merge_requested.emit(ids, None)
-
-    def _on_rows_merged(self, dragged_id: int, target_id: int) -> None:
-        self.merge_requested.emit([target_id, dragged_id], target_id)
-
-    def _collect_mapping(self) -> dict[str, str]:
-        """Return final folder→label mapping from the current table state."""
-        mapping: dict[str, str] = {}
+    def _set_all_checked(self, checked: bool) -> None:
         for row in range(self._table.rowCount()):
-            label_item = self._table.item(row, 0)
-            if label_item is None:
-                continue
-            label = label_item.text().strip() or f"Cluster_{row + 1}"
-            cid = label_item.data(Qt.ItemDataRole.UserRole)
-            cluster = next((c for c in self._clusters if c.id == cid), None)
-            if cluster is None:
-                continue
-            for member in cluster.members:
-                mapping[member] = label
-        return mapping
+            cb = self._use_checkbox(row)
+            if cb is not None:
+                cb.setChecked(checked)
+
+    def _restore_suggestions(self) -> None:
+        for row, entry in enumerate(self._entries):
+            cb = self._use_checkbox(row)
+            if cb is not None:
+                cb.setChecked(entry.auto_suggested)
+
+    def _use_checkbox(self, row: int) -> QCheckBox | None:
+        cell = self._table.cellWidget(row, _COL_USE)
+        if cell is None:
+            return None
+        layout = cell.layout()
+        if layout is None:
+            return None
+        item = layout.itemAt(0)
+        return item.widget() if item is not None else None  # type: ignore[return-value]
+
+    def _edit_splits(self, row: int) -> None:
+        name_item = self._table.item(row, _COL_NAME)
+        label_widget = self._table.cellWidget(row, _COL_LABEL)
+        if name_item is None or label_widget is None:
+            return
+        name = name_item.text()
+        default_label = label_widget.text() if hasattr(label_widget, "text") else name  # type: ignore[attr-defined]
+        dialog = TimeSplitDialog(
+            name, default_label, self._time_splits.get(name, []), self
+        )
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._time_splits[name] = dialog.splits()
 
     def _emit_start(self) -> None:
-        self.start_processing.emit(self._collect_mapping())
+        picks: list[FolderPick] = []
+        for row in range(self._table.rowCount()):
+            cb = self._use_checkbox(row)
+            if cb is None or not cb.isChecked():
+                continue
+            name_item = self._table.item(row, _COL_NAME)
+            label_widget = self._table.cellWidget(row, _COL_LABEL)
+            if name_item is None or label_widget is None:
+                continue
+            name = name_item.text()
+            label = label_widget.text().strip() if hasattr(label_widget, "text") else ""  # type: ignore[attr-defined]
+            if not label:
+                label = name
+            picks.append(
+                FolderPick(
+                    name=name,
+                    destination_label=label,
+                    time_splits=list(self._time_splits.get(name, [])),
+                )
+            )
+        if not picks:
+            QMessageBox.information(
+                self,
+                "No folders picked",
+                "Tick at least one folder to route files into, or go back "
+                "and choose Flatten All.",
+            )
+            return
+        self.start_processing.emit(picks)
