@@ -27,6 +27,29 @@ See [`SPEC.md`](SPEC.md) for the full design.
 - **Drag-and-drop** folder inputs plus a **merge-clusters** UI (multi-select
   button AND drag-and-drop rows).
 
+## Install (end users — recommended)
+
+Go to the **[Releases](../../releases)** page on GitHub, download the latest
+`SemanticFileAggregator-Setup.exe`, double-click it, click Next, click Install.
+The app appears in the Start menu and can be uninstalled from Add/Remove
+Programs just like any other Windows program. No Python required.
+
+## Publish a new release (maintainer)
+
+Every time you push a git tag starting with `v`, GitHub Actions automatically
+builds and publishes a fresh `Setup.exe` to the Releases page.
+
+```
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+Wait ~5 minutes, then refresh the Releases page.
+
+You can also trigger a test build manually: go to the **Actions** tab → *Build
+installer* → *Run workflow*. That produces a downloadable installer as a
+workflow artifact (no public release created).
+
 ## Run from source
 
 ```
@@ -36,35 +59,17 @@ python -m app.main
 
 Requires Python 3.10+.
 
-## Install as a desktop app
+## Build the installer locally (alternative to GitHub Actions)
 
-Bundle into a standalone, double-clickable app with PyInstaller. No Python
-install required on the target machine afterwards.
-
-**Windows:**
+On a Windows machine with Python 3.10+ and [Inno Setup 6](https://jrsoftware.org/isdl.php)
+installed:
 
 ```
 build.bat
+"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
 ```
 
-Output: `dist\SemanticFileAggregator\SemanticFileAggregator.exe`. Pin it to
-Start / Taskbar, or drop a shortcut into `shell:programs` to make it appear
-in the Start menu.
-
-**macOS / Linux:**
-
-```
-./build.sh
-```
-
-macOS output: `dist/SemanticFileAggregator.app` — drag to `/Applications`.
-Linux output: `dist/SemanticFileAggregator/SemanticFileAggregator` — install
-under `~/.local/opt/` and drop a `.desktop` file in
-`~/.local/share/applications/` for menu integration.
-
-Under the hood both scripts run `pyinstaller --noconfirm
-SemanticFileAggregator.spec`. The spec file bundles all `app` submodules and
-produces a windowed (no-console) desktop app.
+Output: `Output\SemanticFileAggregator-Setup.exe`.
 
 ## Self-verification
 
