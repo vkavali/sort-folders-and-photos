@@ -8,7 +8,7 @@ each a destination label, and optionally splits by EXIF timestamp.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Iterable, Optional
 
@@ -50,7 +50,6 @@ class FolderPick:
     """The user's decision about one folder name."""
     name: str
     destination_label: str
-    time_splits: list[TimeSplit] = field(default_factory=list)
 
 
 def build_folder_index(items: Iterable[MediaItem]) -> list[FolderEntry]:
@@ -78,13 +77,11 @@ def build_folder_index(items: Iterable[MediaItem]) -> list[FolderEntry]:
                 auto_suggested=_auto_suggest(name),
             )
         )
-    # Sort by descending file count for UI prominence, with name tiebreak.
     entries.sort(key=lambda e: (-e.file_count, e.name.lower()))
     return entries
 
 
 def _auto_suggest(name: str) -> bool:
-    """Pre-tick heuristic for a folder name."""
     if is_generic_folder_name(name):
         return False
     if looks_like_timestamp_name(name):
@@ -97,27 +94,28 @@ def _auto_suggest(name: str) -> bool:
 def route_file(
     item: MediaItem,
     picks: dict[str, FolderPick],
-    timestamp: datetime | None,
+    timestamp: datetime | None = None,
+    time_splits: list[TimeSplit] | None = None,
 ) -> str:
     """Pick a destination label for one file.
 
-    Rules:
-      1. Walk the file's ancestor chain from deepest to shallowest.
-      2. First ancestor whose NAME is a ticked pick wins.
-      3. If that pick has time_splits AND we have an EXIF/mtime timestamp,
-         match the timestamp to a split window → use split's label.
-      4. Otherwise use the pick's own destination_label.
-      5. If no ancestor matches any pick → return "" (caller treats this
-         as Unsorted).
+    1. Walk ancestors from deepest to shallowest; first ticked pick wins.
+    2. If global time_splits are provided AND the file has a matching
+       ticked ancestor, a matching time window OVERRIDES the folder's
+       destination label. Files not under any ticked ancestor are NOT
+       affected by time_splits — they fall through to Unsorted.
     """
+    base_label = ""
     for i in range(len(item.ancestors) - 1, -1, -1):
         name = item.ancestors[i]
         pick = picks.get(name)
-        if pick is None:
-            continue
-        if pick.time_splits and timestamp is not None:
-            for split in pick.time_splits:
-                if split.contains(timestamp):
-                    return split.destination_label
-        return pick.destination_label
-    return ""
+        if pick is not None:
+            base_label = pick.destination_label
+            break
+    if not base_label:
+        return ""
+    if time_splits and timestamp is not None:
+        for split in time_splits:
+            if split.contains(timestamp):
+                return split.destination_label
+    return base_label

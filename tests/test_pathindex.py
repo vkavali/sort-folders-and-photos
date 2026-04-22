@@ -89,41 +89,68 @@ def test_route_file_no_match_returns_empty():
     assert route_file(item, picks, None) == ""
 
 
-def test_time_split_routing():
-    item = _item(("Marriage-001", "HALDI&SANGEETH"))
-    haldi_window = TimeSplit(
+def test_global_time_split_overrides_folder_label():
+    # Two different ticked folders under different parents.
+    item_a = _item(("Marriage-001", "HALDI&SANGEETH"), "a.jpg")
+    item_b = _item(("Marriage-002", "Marriage Selected"), "b.jpg")
+
+    picks = {
+        "HALDI&SANGEETH": FolderPick(
+            name="HALDI&SANGEETH", destination_label="HS_Default"
+        ),
+        "Marriage Selected": FolderPick(
+            name="Marriage Selected", destination_label="Wedding_Default"
+        ),
+    }
+
+    # Global time windows: morning=Haldi, evening=Sangeet.
+    haldi = TimeSplit(
         start=None,
         end=datetime(2024, 6, 1, 14, 0, 0),
         destination_label="Haldi",
     )
-    sangeet_window = TimeSplit(
+    sangeet = TimeSplit(
         start=datetime(2024, 6, 1, 14, 0, 0),
         end=None,
         destination_label="Sangeet",
     )
-    pick = FolderPick(
-        name="HALDI&SANGEETH",
-        destination_label="HS_Default",
-        time_splits=[haldi_window, sangeet_window],
-    )
-    picks = {"HALDI&SANGEETH": pick}
 
     morning = datetime(2024, 6, 1, 10, 0, 0)
     evening = datetime(2024, 6, 1, 20, 0, 0)
-    assert route_file(item, picks, morning) == "Haldi"
-    assert route_file(item, picks, evening) == "Sangeet"
 
-    # A timestamp outside every window falls back to the pick's default.
-    # (Here both windows together cover all time, so construct a bounded case.)
-    bounded = FolderPick(
-        name="HALDI&SANGEETH",
-        destination_label="HS_Default",
-        time_splits=[
-            TimeSplit(
-                start=datetime(2024, 6, 1, 8, 0, 0),
-                end=datetime(2024, 6, 1, 12, 0, 0),
-                destination_label="Haldi",
-            )
-        ],
+    # Files captured in the morning — from EITHER folder — go to Haldi.
+    assert route_file(item_a, picks, morning, [haldi, sangeet]) == "Haldi"
+    assert route_file(item_b, picks, morning, [haldi, sangeet]) == "Haldi"
+    # Evening files go to Sangeet regardless of source folder.
+    assert route_file(item_a, picks, evening, [haldi, sangeet]) == "Sangeet"
+    assert route_file(item_b, picks, evening, [haldi, sangeet]) == "Sangeet"
+
+
+def test_time_split_falls_back_to_folder_when_no_window_matches():
+    item = _item(("Marriage-001", "HALDI&SANGEETH"))
+    picks = {
+        "HALDI&SANGEETH": FolderPick(
+            name="HALDI&SANGEETH", destination_label="HS_Default"
+        ),
+    }
+    bounded = TimeSplit(
+        start=datetime(2024, 6, 1, 8, 0, 0),
+        end=datetime(2024, 6, 1, 12, 0, 0),
+        destination_label="Haldi",
     )
-    assert route_file(item, {"HALDI&SANGEETH": bounded}, evening) == "HS_Default"
+    morning = datetime(2024, 6, 1, 10, 0, 0)
+    evening = datetime(2024, 6, 1, 20, 0, 0)
+    assert route_file(item, picks, morning, [bounded]) == "Haldi"
+    # Outside the window → fall back to the folder's default.
+    assert route_file(item, picks, evening, [bounded]) == "HS_Default"
+
+
+def test_time_split_does_not_capture_unpicked_files():
+    """A file whose ancestor is NOT ticked should stay Unsorted even if its
+    timestamp matches a global time window."""
+    item = _item(("totally_unrelated",), "u.jpg")
+    picks: dict[str, FolderPick] = {}
+    window = TimeSplit(start=None, end=None, destination_label="Haldi")
+    morning = datetime(2024, 6, 1, 10, 0, 0)
+    # No picks → route_file returns "" which the planner turns into Unsorted.
+    assert route_file(item, picks, morning, [window]) == ""

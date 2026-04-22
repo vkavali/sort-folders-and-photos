@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
 )
 
 from app.config import ACTION_COPY, PROCESSING_MODE_FLATTEN, PROCESSING_MODE_GROUP
-from app.engine.pathindex import FolderEntry, FolderPick
+from app.engine.pathindex import FolderEntry, FolderPick, TimeSplit
 from app.engine.planner import build_plan, build_plan_from_picks
 from app.engine.scanner import MediaItem
 from app.workers import ProcessWorker, ScanWorker
@@ -135,10 +135,17 @@ class MainWindow(QMainWindow):
         self._process_worker.error.connect(self._on_worker_error)
         self._process_worker.start()
 
-    def _on_start_with_picks(self, picks: list[FolderPick]) -> None:
+    def _on_start_with_picks(
+        self, picks: list[FolderPick], time_splits: list[TimeSplit]
+    ) -> None:
         if not self._destination_root:
             return
-        plan = build_plan_from_picks(self._items, picks, self._destination_root)
+        plan = build_plan_from_picks(
+            self._items,
+            picks,
+            self._destination_root,
+            time_splits=time_splits or None,
+        )
         self._progress_page.reset(len(plan))
         self._goto(2)
         self._process_worker = ProcessWorker(

@@ -14,7 +14,7 @@ from typing import Literal, Optional
 
 from app.config import UNSORTED_DIR
 from app.engine.exif import extract_timestamp
-from app.engine.pathindex import FolderPick, route_file
+from app.engine.pathindex import FolderPick, TimeSplit, route_file
 from app.engine.scanner import MediaItem
 
 
@@ -45,15 +45,20 @@ def build_plan_from_picks(
     picks: list[FolderPick],
     destination_root: Path,
     *,
+    time_splits: list[TimeSplit] | None = None,
     fallback_to_unsorted: bool = True,
 ) -> list[PlannedMove]:
-    """Route each item to the deepest-matching ticked folder-name pick."""
+    """Route each item to the deepest-matching ticked folder-name pick.
+
+    Global time_splits (optional) override the folder's destination label
+    when a file's capture time falls inside a window.
+    """
     by_name: dict[str, FolderPick] = {p.name: p for p in picks}
     plan: list[PlannedMove] = []
-    needs_time = any(p.time_splits for p in picks)
+    needs_time = bool(time_splits)
     for item in items:
         timestamp = extract_timestamp(item.source_path) if needs_time else None
-        label = route_file(item, by_name, timestamp)
+        label = route_file(item, by_name, timestamp, time_splits)
         if not label:
             label = UNSORTED_DIR if fallback_to_unsorted else ""
         plan.append(PlannedMove(item=item, category=label))
