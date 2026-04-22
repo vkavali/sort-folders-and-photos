@@ -251,15 +251,29 @@ QRadioButton::indicator:checked {
     border-radius: 9px;
     background: #ffffff;
 }
-QCheckBox::indicator:unchecked {
-    border: 1.5px solid #cbd5e1;
-    border-radius: 5px;
+/* Native Fusion draws the checkmark for us when we don't fully override. */
+
+/* ---------- TickButton (checkbox replacement in tables) ---------- */
+QPushButton[role="tick"] {
     background: #ffffff;
+    color: #ffffff;
+    border: 1.5px solid #cbd5e1;
+    border-radius: 6px;
+    font-weight: 700;
+    font-size: 13px;
+    padding: 0;
 }
-QCheckBox::indicator:checked {
-    border: 1.5px solid #2563eb;
-    border-radius: 5px;
+QPushButton[role="tick"]:hover {
+    border-color: #94a3b8;
+}
+QPushButton[role="tick"]:checked {
     background: #2563eb;
+    border: 1.5px solid #2563eb;
+    color: #ffffff;
+}
+QPushButton[role="tick"]:checked:hover {
+    background: #1d4ed8;
+    border-color: #1d4ed8;
 }
 
 /* ---------- Tables ---------- */

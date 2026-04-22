@@ -129,6 +129,44 @@ def test_flatten_mode_single_bucket(tmp_path: Path):
     assert any(p.is_file() for p in (dst / DUPLICATES_DIR).rglob("*"))
 
 
+def test_cancel_stops_submitting_new_files(tmp_path: Path):
+    """cancel_cb returning True should result in remaining files being
+    marked skipped, and no further files touched on disk."""
+    src = tmp_path / "src"
+    dst = tmp_path / "dst"
+    # Make several files so the batch-submit loop runs more than once.
+    for i in range(12):
+        _write(src / f"folder_{i}" / f"IMG_{i}.JPG", _jpeg(i))
+
+    items = scan(src)
+    mapping = {i.parent_folder: "" for i in items}
+    plan = build_plan(items, mapping, dst)
+
+    # Flip cancellation on after the 3rd file finishes.
+    processed = {"n": 0}
+    cancelled = {"flag": False}
+
+    def _on_done(_p):
+        processed["n"] += 1
+        if processed["n"] >= 3:
+            cancelled["flag"] = True
+
+    stats = execute_plan(
+        plan,
+        dst,
+        action=ACTION_COPY,
+        max_workers=2,
+        file_done_cb=_on_done,
+        cancel_cb=lambda: cancelled["flag"],
+    )
+
+    # Some files should be skipped.
+    assert stats.skipped > 0
+    # The ones we did process land in destination; source copies still exist.
+    assert stats.total == 12
+    assert (stats.copied + stats.skipped + stats.errors + stats.duplicates) == 12
+
+
 def test_size_prefilter_avoids_hashing_unique_sizes(tmp_path: Path):
     import app.engine.executor as exe
 

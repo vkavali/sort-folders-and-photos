@@ -50,6 +50,25 @@ class Card(QFrame):
         attach_shadow(self)
 
 
+class TickButton(QPushButton):
+    """A QPushButton that behaves like a checkbox but always shows a legible
+    white checkmark when checked. Avoids Qt-style QCheckBox rendering quirks
+    inside QTableWidget cells.
+    """
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setCheckable(True)
+        self.setFixedSize(22, 22)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setProperty("role", "tick")
+        self.toggled.connect(self._sync_label)
+        self._sync_label(self.isChecked())
+
+    def _sync_label(self, checked: bool) -> None:
+        self.setText("✓" if checked else "")
+
+
 class SegmentedControl(QWidget):
     """iOS-style exclusive segmented control.
 

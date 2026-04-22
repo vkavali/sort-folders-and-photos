@@ -5,9 +5,9 @@ Two user-selectable actions:
   * "move"           — after the destination hash matches, the source file
                        is deleted. Source directories are always preserved.
 
-Byte-size pre-filter: files with unique sizes mathematically cannot duplicate
-any peer in the batch and skip cryptographic hashing (they still verify by
-size after copying).
+Concurrency: files are submitted to the thread pool in small batches so
+that a cancel request takes effect promptly — in-flight copies finish,
+everything not yet submitted is skipped.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 import shutil
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
@@ -238,36 +238,52 @@ def execute_plan(
         cpu = os.cpu_count() or 2
         max_workers = min(8, max(2, cpu * 2))
 
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {}
-        for p in plan:
-            if _is_cancelled(cancel_cb):
-                p.status = "skipped"
-                p.message = "Cancelled before start"
-                stats.record(p.status)
-                emit_done(p)
-                continue
-            fut = pool.submit(
-                _process_one, p, destination_root, ledger, size_peers, action, log
-            )
-            futures[fut] = p
+    def _record(result: PlannedMove) -> None:
+        if result.status == "collision_renamed":
+            stats.collisions_renamed += 1
+            stats.record("copied" if action == ACTION_COPY else "moved")
+        else:
+            stats.record(result.status)
+        emit_done(result)
 
-        for fut in as_completed(futures):
-            p = futures[fut]
-            try:
-                result = fut.result()
-            except Exception as exc:
-                p.status = "error"
-                p.message = f"{type(exc).__name__}: {exc}"
-                result = p
-            if _is_cancelled(cancel_cb) and result.status == "pending":
-                result.status = "skipped"
-                result.message = "Cancelled mid-run"
-            if result.status == "collision_renamed":
-                stats.collisions_renamed += 1
-                stats.record("copied" if action == ACTION_COPY else "moved")
-            else:
-                stats.record(result.status)
-            emit_done(result)
+    pending_idx = 0
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        in_flight: dict = {}
+
+        # Keep the pool no more than max_workers deep so cancel can bite.
+        while pending_idx < len(plan) or in_flight:
+            while (
+                pending_idx < len(plan)
+                and len(in_flight) < max_workers
+                and not _is_cancelled(cancel_cb)
+            ):
+                p = plan[pending_idx]
+                pending_idx += 1
+                fut = pool.submit(
+                    _process_one, p, destination_root, ledger, size_peers, action, log
+                )
+                in_flight[fut] = p
+
+            if not in_flight:
+                break
+
+            done, _ = wait(list(in_flight.keys()), return_when=FIRST_COMPLETED)
+            for fut in done:
+                p = in_flight.pop(fut)
+                try:
+                    result = fut.result()
+                except Exception as exc:
+                    p.status = "error"
+                    p.message = f"{type(exc).__name__}: {exc}"
+                    result = p
+                _record(result)
+
+        # Anything never submitted is considered skipped.
+        while pending_idx < len(plan):
+            p = plan[pending_idx]
+            pending_idx += 1
+            p.status = "skipped"
+            p.message = "Cancelled before start"
+            _record(p)
 
     return stats

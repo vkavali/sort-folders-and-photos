@@ -12,11 +12,9 @@ from typing import Iterable
 from PyQt6.QtCore import QDateTime, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QAbstractItemView,
-    QCheckBox,
     QDateTimeEdit,
     QDialog,
     QDialogButtonBox,
-    QFormLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -30,6 +28,7 @@ from PyQt6.QtWidgets import (
 )
 
 from app.engine.pathindex import FolderEntry, FolderPick, TimeSplit
+from app.ui.widgets import TickButton
 
 
 _COL_USE = 0
@@ -76,6 +75,7 @@ class TimeSplitDialog(QDialog):
             QHeaderView.ResizeMode.Stretch
         )
         self._table.verticalHeader().setVisible(False)
+        self._table.verticalHeader().setDefaultSectionSize(40)
         layout.addWidget(self._table, stretch=1)
 
         btn_row = QHBoxLayout()
@@ -148,8 +148,8 @@ class MappingPage(QWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._entries: list[FolderEntry] = []
-        # Keep per-folder-name split config separate from the table widget state
-        self._time_splits: dict[str, list[TimeSplit]] = {}
+        self._row_ticks: list[TickButton] = []
+        self._row_splits: dict[int, list[TimeSplit]] = {}   # by row index
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -171,22 +171,28 @@ class MappingPage(QWidget):
 
         self._table = QTableWidget(0, 6)
         self._table.setHorizontalHeaderLabels(
-            ["Use", "Folder name", "Occurrences", "Photos under it",
-             "Destination label", "Time splits"]
+            ["Use", "Folder name", "Occurrences", "Photos", "Destination label",
+             "Time splits"]
         )
-        self._table.horizontalHeader().setSectionResizeMode(
-            _COL_NAME, QHeaderView.ResizeMode.Stretch
-        )
-        self._table.horizontalHeader().setSectionResizeMode(
-            _COL_LABEL, QHeaderView.ResizeMode.Stretch
-        )
-        for c in (_COL_USE, _COL_OCCUR, _COL_FILES, _COL_SPLIT):
-            self._table.horizontalHeader().setSectionResizeMode(
-                c, QHeaderView.ResizeMode.ResizeToContents
-            )
+        header_view = self._table.horizontalHeader()
+        header_view.setSectionResizeMode(_COL_NAME, QHeaderView.ResizeMode.Stretch)
+        header_view.setSectionResizeMode(_COL_LABEL, QHeaderView.ResizeMode.Stretch)
+        header_view.setSectionResizeMode(_COL_USE, QHeaderView.ResizeMode.Fixed)
+        self._table.setColumnWidth(_COL_USE, 64)
+        header_view.setSectionResizeMode(_COL_OCCUR, QHeaderView.ResizeMode.ResizeToContents)
+        header_view.setSectionResizeMode(_COL_FILES, QHeaderView.ResizeMode.ResizeToContents)
+        header_view.setSectionResizeMode(_COL_SPLIT, QHeaderView.ResizeMode.Fixed)
+        self._table.setColumnWidth(_COL_SPLIT, 130)
         self._table.verticalHeader().setVisible(False)
+        self._table.verticalHeader().setDefaultSectionSize(48)
         self._table.setSelectionBehavior(
             QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        self._table.setAlternatingRowColors(True)
+        self._table.setEditTriggers(
+            QAbstractItemView.EditTrigger.DoubleClicked
+            | QAbstractItemView.EditTrigger.EditKeyPressed
+            | QAbstractItemView.EditTrigger.AnyKeyPressed
         )
         layout.addWidget(self._table, stretch=1)
 
@@ -204,37 +210,47 @@ class MappingPage(QWidget):
         toolbar.addStretch(1)
         start_btn = QPushButton("Start Processing")
         start_btn.setDefault(True)
-        start_btn.setMinimumHeight(38)
+        start_btn.setMinimumHeight(40)
         start_btn.setMinimumWidth(160)
+        start_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         start_btn.clicked.connect(self._emit_start)
         toolbar.addWidget(start_btn)
         layout.addLayout(toolbar)
 
     def set_entries(self, entries: Iterable[FolderEntry]) -> None:
         self._entries = list(entries)
-        self._time_splits.clear()
+        self._row_ticks.clear()
+        self._row_splits.clear()
         self._refresh_table()
 
     def _refresh_table(self) -> None:
         self._table.setRowCount(0)
+        self._row_ticks.clear()
         for entry in self._entries:
             row = self._table.rowCount()
             self._table.insertRow(row)
 
-            use_cell = QWidget()
-            use_layout = QHBoxLayout(use_cell)
-            use_layout.setContentsMargins(0, 0, 0, 0)
-            use_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            cb = QCheckBox()
-            cb.setChecked(entry.auto_suggested)
-            use_layout.addWidget(cb)
-            self._table.setCellWidget(row, _COL_USE, use_cell)
+            # Tick button in a centered cell container
+            tick_cell = QWidget()
+            tick_layout = QHBoxLayout(tick_cell)
+            tick_layout.setContentsMargins(0, 0, 0, 0)
+            tick_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            tick = TickButton()
+            tick.setChecked(entry.auto_suggested)
+            tick_layout.addWidget(tick)
+            self._table.setCellWidget(row, _COL_USE, tick_cell)
+            self._row_ticks.append(tick)
 
+            # Folder name — non-editable
             name_item = QTableWidgetItem(entry.name)
-            name_item.setFlags(name_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            name_item.setFlags(
+                (name_item.flags() | Qt.ItemFlag.ItemIsEnabled)
+                & ~Qt.ItemFlag.ItemIsEditable
+            )
             name_item.setData(Qt.ItemDataRole.UserRole, entry.name)
             self._table.setItem(row, _COL_NAME, name_item)
 
+            # Counts — non-editable
             occ_item = QTableWidgetItem(str(entry.occurrences))
             occ_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             occ_item.setFlags(occ_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
@@ -245,69 +261,64 @@ class MappingPage(QWidget):
             files_item.setFlags(files_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self._table.setItem(row, _COL_FILES, files_item)
 
-            label_edit = QLineEdit(entry.name)
-            self._table.setCellWidget(row, _COL_LABEL, label_edit)
+            # Destination label — NATIVE editable table item. Cleanest look.
+            label_item = QTableWidgetItem(entry.name)
+            label_item.setFlags(label_item.flags() | Qt.ItemFlag.ItemIsEditable)
+            label_item.setToolTip("Double-click to rename")
+            self._table.setItem(row, _COL_LABEL, label_item)
 
+            # Time splits button — explicitly sized so it renders in-cell
+            split_cell = QWidget()
+            split_layout = QHBoxLayout(split_cell)
+            split_layout.setContentsMargins(8, 6, 8, 6)
+            split_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
             split_btn = QPushButton("Time splits…")
+            split_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            split_btn.setMinimumHeight(28)
             split_btn.clicked.connect(
                 lambda _checked=False, r=row: self._edit_splits(r)
             )
-            self._table.setCellWidget(row, _COL_SPLIT, split_btn)
+            split_layout.addWidget(split_btn)
+            self._table.setCellWidget(row, _COL_SPLIT, split_cell)
 
     def _set_all_checked(self, checked: bool) -> None:
-        for row in range(self._table.rowCount()):
-            cb = self._use_checkbox(row)
-            if cb is not None:
-                cb.setChecked(checked)
+        for tick in self._row_ticks:
+            tick.setChecked(checked)
 
     def _restore_suggestions(self) -> None:
-        for row, entry in enumerate(self._entries):
-            cb = self._use_checkbox(row)
-            if cb is not None:
-                cb.setChecked(entry.auto_suggested)
-
-    def _use_checkbox(self, row: int) -> QCheckBox | None:
-        cell = self._table.cellWidget(row, _COL_USE)
-        if cell is None:
-            return None
-        layout = cell.layout()
-        if layout is None:
-            return None
-        item = layout.itemAt(0)
-        return item.widget() if item is not None else None  # type: ignore[return-value]
+        for tick, entry in zip(self._row_ticks, self._entries):
+            tick.setChecked(entry.auto_suggested)
 
     def _edit_splits(self, row: int) -> None:
         name_item = self._table.item(row, _COL_NAME)
-        label_widget = self._table.cellWidget(row, _COL_LABEL)
-        if name_item is None or label_widget is None:
+        label_item = self._table.item(row, _COL_LABEL)
+        if name_item is None or label_item is None:
             return
         name = name_item.text()
-        default_label = label_widget.text() if hasattr(label_widget, "text") else name  # type: ignore[attr-defined]
+        default_label = label_item.text().strip() or name
         dialog = TimeSplitDialog(
-            name, default_label, self._time_splits.get(name, []), self
+            name, default_label, self._row_splits.get(row, []), self
         )
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            self._time_splits[name] = dialog.splits()
+            self._row_splits[row] = dialog.splits()
 
     def _emit_start(self) -> None:
         picks: list[FolderPick] = []
         for row in range(self._table.rowCount()):
-            cb = self._use_checkbox(row)
-            if cb is None or not cb.isChecked():
+            tick = self._row_ticks[row] if row < len(self._row_ticks) else None
+            if tick is None or not tick.isChecked():
                 continue
             name_item = self._table.item(row, _COL_NAME)
-            label_widget = self._table.cellWidget(row, _COL_LABEL)
-            if name_item is None or label_widget is None:
+            label_item = self._table.item(row, _COL_LABEL)
+            if name_item is None or label_item is None:
                 continue
             name = name_item.text()
-            label = label_widget.text().strip() if hasattr(label_widget, "text") else ""  # type: ignore[attr-defined]
-            if not label:
-                label = name
+            label = label_item.text().strip() or name
             picks.append(
                 FolderPick(
                     name=name,
                     destination_label=label,
-                    time_splits=list(self._time_splits.get(name, [])),
+                    time_splits=list(self._row_splits.get(row, [])),
                 )
             )
         if not picks:
