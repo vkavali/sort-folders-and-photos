@@ -116,7 +116,7 @@ class MainWindow(QMainWindow):
         if self._mode == PROCESSING_MODE_FLATTEN:
             self._run_flatten()
             return
-        self._mapping_page.set_entries(folder_entries)
+        self._mapping_page.set_entries(folder_entries, items)
         self._goto(1)
 
     def _run_flatten(self) -> None:

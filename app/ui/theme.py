@@ -121,7 +121,7 @@ QLineEdit, QDateTimeEdit {
     background: #ffffff;
     border: 1px solid #d1d5db;
     border-radius: 8px;
-    padding: 8px 12px;
+    padding: 6px 10px;
     selection-background-color: #bfdbfe;
     font-size: 13px;
 }
@@ -132,6 +132,42 @@ QLineEdit:disabled {
     color: #9ca3af;
     background: #f3f4f6;
 }
+QDateTimeEdit::drop-down {
+    border: none;
+    width: 22px;
+    subcontrol-origin: padding;
+    subcontrol-position: right center;
+}
+QDateTimeEdit::up-button, QDateTimeEdit::down-button {
+    width: 14px;
+}
+
+/* Calendar popup inside QDateTimeEdit */
+QCalendarWidget QToolButton {
+    color: #0f172a;
+    background: transparent;
+    padding: 6px 8px;
+    border-radius: 6px;
+    font-weight: 600;
+}
+QCalendarWidget QToolButton:hover { background: #eff6ff; color: #1d4ed8; }
+QCalendarWidget QMenu { background: #ffffff; color: #0f172a; }
+QCalendarWidget QSpinBox {
+    background: #ffffff; color: #0f172a;
+    border: 1px solid #e5e7eb; border-radius: 6px; padding: 2px 4px;
+}
+QCalendarWidget QWidget#qt_calendar_navigationbar {
+    background: #ffffff;
+    border-bottom: 1px solid #eef0f3;
+}
+QCalendarWidget QAbstractItemView:enabled {
+    color: #0f172a;
+    background: #ffffff;
+    selection-background-color: #2563eb;
+    selection-color: #ffffff;
+    outline: none;
+}
+QCalendarWidget QAbstractItemView:disabled { color: #cbd5e1; }
 
 /* ---------- Buttons ---------- */
 QPushButton {

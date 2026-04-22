@@ -15,6 +15,7 @@ class MediaItem:
     source_path: Path
     ancestors: tuple[str, ...]   # folder names from source_root (exclusive) down to immediate parent
     size_bytes: int
+    mtime_ts: float = 0.0        # filesystem mtime (seconds since epoch), 0.0 if unknown
 
     @property
     def parent_folder(self) -> str:
@@ -49,6 +50,7 @@ def _iter_media(root: Path) -> Iterator[MediaItem]:
                                     source_path=Path(entry.path),
                                     ancestors=ancestors,
                                     size_bytes=stat.st_size,
+                                    mtime_ts=stat.st_mtime,
                                 )
                     except (PermissionError, FileNotFoundError, OSError):
                         continue

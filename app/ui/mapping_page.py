@@ -6,8 +6,8 @@ that further split the files by EXIF capture time.
 
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Iterable
+from datetime import datetime, timedelta
+from typing import Iterable, Optional
 
 from PyQt6.QtCore import QDateTime, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -28,6 +28,7 @@ from PyQt6.QtWidgets import (
 )
 
 from app.engine.pathindex import FolderEntry, FolderPick, TimeSplit
+from app.engine.scanner import MediaItem
 from app.ui.widgets import TickButton
 
 
@@ -39,49 +40,96 @@ _COL_LABEL = 4
 _COL_SPLIT = 5
 
 
+def _wrap_cell(widget: QWidget) -> QWidget:
+    """Pad a widget so it renders cleanly inside a QTableWidget cell."""
+    container = QWidget()
+    layout = QHBoxLayout(container)
+    layout.setContentsMargins(6, 4, 6, 4)
+    layout.setSpacing(0)
+    layout.addWidget(widget)
+    return container
+
+
 class TimeSplitDialog(QDialog):
-    """Edit time-window splits for one folder pick."""
+    """Edit EXIF-time split windows for one folder pick.
+
+    When folder_min/folder_max are supplied the dialog pre-populates a
+    single-row default covering the folder's actual capture range, so the
+    user doesn't start from an arbitrary 'today' default.
+    """
 
     def __init__(
         self,
         folder_name: str,
         default_label: str,
         initial_splits: list[TimeSplit],
+        folder_min: Optional[datetime] = None,
+        folder_max: Optional[datetime] = None,
+        file_count: int = 0,
         parent=None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle(f"Time splits for '{folder_name}'")
-        self.resize(640, 360)
+        self.setWindowTitle(f"Time splits · '{folder_name}'")
+        self.resize(720, 420)
         self._default_label = default_label
+        self._folder_min = folder_min
+        self._folder_max = folder_max
+        self._file_count = file_count
         self._build_ui()
-        for split in initial_splits:
-            self._add_row(split)
+        if initial_splits:
+            for split in initial_splits:
+                self._add_row(split)
+        elif folder_min is not None and folder_max is not None:
+            self._add_row(
+                TimeSplit(
+                    start=folder_min,
+                    end=folder_max + timedelta(minutes=1),
+                    destination_label=default_label,
+                )
+            )
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
-        info = QLabel(
-            "Route photos inside this folder by their EXIF capture time. "
-            "Files are assigned to the first matching window; files with no "
-            "matching window use the folder's default destination."
+        layout.setContentsMargins(22, 20, 22, 18)
+        layout.setSpacing(12)
+
+        lead = QLabel(
+            "Route photos inside this folder by their capture time. Files are "
+            "assigned to the first matching window; files with no matching "
+            "window use the folder's default destination."
         )
-        info.setWordWrap(True)
-        layout.addWidget(info)
+        lead.setProperty("role", "subtitle")
+        lead.setWordWrap(True)
+        layout.addWidget(lead)
+
+        if self._folder_min is not None and self._folder_max is not None:
+            count_txt = f"{self._file_count} photo" + ("s" if self._file_count != 1 else "")
+            range_txt = (
+                f"{self._folder_min.strftime('%Y-%m-%d %H:%M')}  →  "
+                f"{self._folder_max.strftime('%Y-%m-%d %H:%M')}"
+            )
+            range_label = QLabel(f"{count_txt} in this folder.   Capture range: {range_txt}")
+            range_label.setProperty("role", "subtitle")
+            range_label.setStyleSheet("color: #0f172a; font-weight: 600;")
+            layout.addWidget(range_label)
 
         self._table = QTableWidget(0, 3)
         self._table.setHorizontalHeaderLabels(
             ["Start (inclusive)", "End (exclusive)", "Destination label"]
         )
-        self._table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.Stretch
-        )
+        header = self._table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self._table.verticalHeader().setVisible(False)
-        self._table.verticalHeader().setDefaultSectionSize(40)
+        self._table.verticalHeader().setDefaultSectionSize(52)
+        self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         layout.addWidget(self._table, stretch=1)
 
         btn_row = QHBoxLayout()
         add_btn = QPushButton("Add window")
+        add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         add_btn.clicked.connect(lambda: self._add_row())
         remove_btn = QPushButton("Remove selected")
+        remove_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         remove_btn.clicked.connect(self._remove_selected)
         btn_row.addWidget(add_btn)
         btn_row.addWidget(remove_btn)
@@ -95,42 +143,68 @@ class TimeSplitDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
+    def _make_dt_edit(self, initial: Optional[datetime]) -> QDateTimeEdit:
+        dt = QDateTimeEdit()
+        dt.setDisplayFormat("yyyy-MM-dd  HH:mm")
+        dt.setCalendarPopup(True)
+        dt.setMinimumHeight(34)
+        dt.setButtonSymbols(QDateTimeEdit.ButtonSymbols.UpDownArrows)
+        # Neutralize Qt's default red Saturday/Sunday text inside the popup.
+        cal = dt.calendarWidget()
+        if cal is not None:
+            from PyQt6.QtGui import QColor, QTextCharFormat
+            fmt = QTextCharFormat()
+            fmt.setForeground(QColor("#0f172a"))
+            cal.setWeekdayTextFormat(Qt.DayOfWeek.Saturday, fmt)
+            cal.setWeekdayTextFormat(Qt.DayOfWeek.Sunday, fmt)
+        if initial is not None:
+            dt.setDateTime(QDateTime(initial))
+        elif self._folder_min is not None:
+            dt.setDateTime(QDateTime(self._folder_min))
+        else:
+            dt.setDateTime(QDateTime.currentDateTime())
+        return dt
+
     def _add_row(self, split: TimeSplit | None = None) -> None:
         row = self._table.rowCount()
         self._table.insertRow(row)
 
-        start = QDateTimeEdit()
-        start.setDisplayFormat("yyyy-MM-dd HH:mm")
-        start.setCalendarPopup(True)
-        if split and split.start is not None:
-            start.setDateTime(QDateTime(split.start))
-        else:
-            start.setDateTime(QDateTime.currentDateTime().addDays(-1))
-        self._table.setCellWidget(row, 0, start)
+        start = self._make_dt_edit(split.start if split else self._folder_min)
+        self._table.setCellWidget(row, 0, _wrap_cell(start))
 
-        end = QDateTimeEdit()
-        end.setDisplayFormat("yyyy-MM-dd HH:mm")
-        end.setCalendarPopup(True)
+        end_default = None
         if split and split.end is not None:
-            end.setDateTime(QDateTime(split.end))
-        else:
-            end.setDateTime(QDateTime.currentDateTime())
-        self._table.setCellWidget(row, 1, end)
+            end_default = split.end
+        elif self._folder_max is not None:
+            end_default = self._folder_max + timedelta(minutes=1)
+        end = self._make_dt_edit(end_default)
+        self._table.setCellWidget(row, 1, _wrap_cell(end))
 
         label = QLineEdit(split.destination_label if split else self._default_label)
-        self._table.setCellWidget(row, 2, label)
+        label.setMinimumHeight(34)
+        self._table.setCellWidget(row, 2, _wrap_cell(label))
 
     def _remove_selected(self) -> None:
         rows = sorted({idx.row() for idx in self._table.selectedIndexes()}, reverse=True)
         for r in rows:
             self._table.removeRow(r)
 
+    @staticmethod
+    def _inner_widget(cell: QWidget | None):
+        if cell is None:
+            return None
+        layout = cell.layout()
+        if layout is None or layout.count() == 0:
+            return None
+        item = layout.itemAt(0)
+        return item.widget() if item is not None else None
+
     def splits(self) -> list[TimeSplit]:
         result: list[TimeSplit] = []
         for row in range(self._table.rowCount()):
-            start_widget = self._table.cellWidget(row, 0)
-            end_widget = self._table.cellWidget(row, 1)
-            label_widget = self._table.cellWidget(row, 2)
+            start_widget = self._inner_widget(self._table.cellWidget(row, 0))
+            end_widget = self._inner_widget(self._table.cellWidget(row, 1))
+            label_widget = self._inner_widget(self._table.cellWidget(row, 2))
             if not start_widget or not end_widget or not label_widget:
                 continue
             start: datetime = start_widget.dateTime().toPyDateTime()  # type: ignore[attr-defined]
@@ -148,6 +222,8 @@ class MappingPage(QWidget):
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._entries: list[FolderEntry] = []
+        self._items: list[MediaItem] = []
+        self._folder_times: dict[str, tuple[datetime, datetime]] = {}
         self._row_ticks: list[TickButton] = []
         self._row_splits: dict[int, list[TimeSplit]] = {}   # by row index
         self._build_ui()
@@ -217,11 +293,37 @@ class MappingPage(QWidget):
         toolbar.addWidget(start_btn)
         layout.addLayout(toolbar)
 
-    def set_entries(self, entries: Iterable[FolderEntry]) -> None:
+    def set_entries(
+        self,
+        entries: Iterable[FolderEntry],
+        items: Iterable[MediaItem] | None = None,
+    ) -> None:
         self._entries = list(entries)
+        self._items = list(items) if items is not None else []
+        self._folder_times = self._compute_folder_times(self._items)
         self._row_ticks.clear()
         self._row_splits.clear()
         self._refresh_table()
+
+    @staticmethod
+    def _compute_folder_times(
+        items: list[MediaItem],
+    ) -> dict[str, tuple[datetime, datetime]]:
+        buckets: dict[str, list[float]] = {}
+        for item in items:
+            if item.mtime_ts <= 0:
+                continue
+            for name in item.ancestors:
+                buckets.setdefault(name, []).append(item.mtime_ts)
+        out: dict[str, tuple[datetime, datetime]] = {}
+        for name, ts_list in buckets.items():
+            if not ts_list:
+                continue
+            out[name] = (
+                datetime.fromtimestamp(min(ts_list)),
+                datetime.fromtimestamp(max(ts_list)),
+            )
+        return out
 
     def _refresh_table(self) -> None:
         self._table.setRowCount(0)
@@ -230,7 +332,6 @@ class MappingPage(QWidget):
             row = self._table.rowCount()
             self._table.insertRow(row)
 
-            # Tick button in a centered cell container
             tick_cell = QWidget()
             tick_layout = QHBoxLayout(tick_cell)
             tick_layout.setContentsMargins(0, 0, 0, 0)
@@ -241,7 +342,6 @@ class MappingPage(QWidget):
             self._table.setCellWidget(row, _COL_USE, tick_cell)
             self._row_ticks.append(tick)
 
-            # Folder name — non-editable
             name_item = QTableWidgetItem(entry.name)
             name_item.setFlags(
                 (name_item.flags() | Qt.ItemFlag.ItemIsEnabled)
@@ -250,7 +350,6 @@ class MappingPage(QWidget):
             name_item.setData(Qt.ItemDataRole.UserRole, entry.name)
             self._table.setItem(row, _COL_NAME, name_item)
 
-            # Counts — non-editable
             occ_item = QTableWidgetItem(str(entry.occurrences))
             occ_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             occ_item.setFlags(occ_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
@@ -261,13 +360,11 @@ class MappingPage(QWidget):
             files_item.setFlags(files_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self._table.setItem(row, _COL_FILES, files_item)
 
-            # Destination label — NATIVE editable table item. Cleanest look.
             label_item = QTableWidgetItem(entry.name)
             label_item.setFlags(label_item.flags() | Qt.ItemFlag.ItemIsEditable)
             label_item.setToolTip("Double-click to rename")
             self._table.setItem(row, _COL_LABEL, label_item)
 
-            # Time splits button — explicitly sized so it renders in-cell
             split_cell = QWidget()
             split_layout = QHBoxLayout(split_cell)
             split_layout.setContentsMargins(8, 6, 8, 6)
@@ -296,8 +393,18 @@ class MappingPage(QWidget):
             return
         name = name_item.text()
         default_label = label_item.text().strip() or name
+        fmin, fmax = self._folder_times.get(name, (None, None))
+        file_count = next(
+            (e.file_count for e in self._entries if e.name == name), 0
+        )
         dialog = TimeSplitDialog(
-            name, default_label, self._row_splits.get(row, []), self
+            folder_name=name,
+            default_label=default_label,
+            initial_splits=self._row_splits.get(row, []),
+            folder_min=fmin,
+            folder_max=fmax,
+            file_count=file_count,
+            parent=self,
         )
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self._row_splits[row] = dialog.splits()
