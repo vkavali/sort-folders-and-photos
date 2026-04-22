@@ -1,21 +1,15 @@
-"""Source / destination picker with mode + action + drag-and-drop."""
+"""Modern Source page: drop zones + segmented toggles + single primary action."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QDragEnterEvent, QDropEvent
 from PyQt6.QtWidgets import (
-    QButtonGroup,
-    QFileDialog,
-    QFrame,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QMessageBox,
     QPushButton,
-    QRadioButton,
     QSizePolicy,
     QSpacerItem,
     QVBoxLayout,
@@ -28,59 +22,7 @@ from app.config import (
     PROCESSING_MODE_FLATTEN,
     PROCESSING_MODE_GROUP,
 )
-
-
-class _DropLineEdit(QLineEdit):
-    def __init__(self, placeholder: str, parent=None) -> None:
-        super().__init__(parent)
-        self.setPlaceholderText(placeholder)
-        self.setAcceptDrops(True)
-        self._default_border: str = ""
-
-    def _highlight(self, active: bool) -> None:
-        if active:
-            self.setStyleSheet(
-                "QLineEdit { border: 2px solid #2563eb; background: #eff6ff; }"
-            )
-        else:
-            self.setStyleSheet(self._default_border)
-
-    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
-        md = event.mimeData()
-        if md.hasUrls() and any(u.isLocalFile() for u in md.urls()):
-            event.acceptProposedAction()
-            self._highlight(True)
-        else:
-            event.ignore()
-
-    def dragLeaveEvent(self, event) -> None:
-        self._highlight(False)
-        super().dragLeaveEvent(event)
-
-    def dropEvent(self, event: QDropEvent) -> None:
-        self._highlight(False)
-        for url in event.mimeData().urls():
-            if not url.isLocalFile():
-                continue
-            path = Path(url.toLocalFile())
-            if path.is_dir():
-                self.setText(str(path))
-                event.acceptProposedAction()
-                return
-        event.ignore()
-
-
-def _make_card(title: str) -> tuple[QFrame, QVBoxLayout]:
-    frame = QFrame()
-    frame.setProperty("role", "card")
-    frame.setFrameShape(QFrame.Shape.NoFrame)
-    layout = QVBoxLayout(frame)
-    layout.setContentsMargins(18, 14, 18, 16)
-    layout.setSpacing(6)
-    title_label = QLabel(title)
-    title_label.setProperty("role", "sectionTitle")
-    layout.addWidget(title_label)
-    return frame, layout
+from app.ui.widgets import DropZone, SegmentedControl
 
 
 class SourcePage(QWidget):
@@ -93,75 +35,69 @@ class SourcePage(QWidget):
 
     def _build_ui(self) -> None:
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(32, 28, 32, 28)
-        outer.setSpacing(18)
+        outer.setContentsMargins(48, 40, 48, 40)
+        outer.setSpacing(24)
 
-        title = QLabel("Semantic File Aggregator")
+        title = QLabel("Start a new run")
         title.setProperty("role", "title")
         subtitle = QLabel(
-            "Pick a source folder, a destination, and how you want things "
-            "sorted. Originals stay untouched unless you choose Move."
+            "Pick a source folder to scan and a destination to receive "
+            "the sorted files. Everything happens locally on this machine."
         )
         subtitle.setProperty("role", "subtitle")
         subtitle.setWordWrap(True)
         outer.addWidget(title)
         outer.addWidget(subtitle)
 
-        # Mode card
-        mode_card, mode_layout = _make_card("Processing mode")
-        self._mode_group_radio = QRadioButton(
-            "Folder picker  —  review every folder name, tick which to keep as categories"
+        # Drop zones row
+        zones = QHBoxLayout()
+        zones.setSpacing(16)
+        self._source_zone = DropZone("Source")
+        self._dest_zone = DropZone("Destination")
+        zones.addWidget(self._source_zone)
+        zones.addWidget(self._dest_zone)
+        outer.addLayout(zones)
+
+        # Toggle row
+        toggles = QHBoxLayout()
+        toggles.setSpacing(36)
+
+        mode_col = QVBoxLayout()
+        mode_col.setSpacing(8)
+        mode_label = QLabel("HOW TO SORT")
+        mode_label.setProperty("role", "sectionTitle")
+        self._mode_ctrl = SegmentedControl(
+            [(PROCESSING_MODE_GROUP, "Folder picker"),
+             (PROCESSING_MODE_FLATTEN, "Flatten all")],
+            default=PROCESSING_MODE_GROUP,
         )
-        self._mode_group_radio.setChecked(True)
-        self._mode_flatten_radio = QRadioButton(
-            "Flatten All  —  every file lands in the destination root, no subfolders"
+        mode_col.addWidget(mode_label)
+        mode_col.addWidget(self._mode_ctrl)
+        toggles.addLayout(mode_col)
+
+        action_col = QVBoxLayout()
+        action_col.setSpacing(8)
+        action_label = QLabel("ACTION")
+        action_label.setProperty("role", "sectionTitle")
+        self._action_ctrl = SegmentedControl(
+            [(ACTION_COPY, "Copy"), (ACTION_MOVE, "Move")],
+            default=ACTION_COPY,
         )
-        mode_layout.addWidget(self._mode_group_radio)
-        mode_layout.addWidget(self._mode_flatten_radio)
-        self._mode_group = QButtonGroup(self)
-        self._mode_group.addButton(self._mode_group_radio)
-        self._mode_group.addButton(self._mode_flatten_radio)
-        outer.addWidget(mode_card)
+        action_col.addWidget(action_label)
+        action_col.addWidget(self._action_ctrl)
+        toggles.addLayout(action_col)
 
-        # Action card
-        action_card, action_layout = _make_card("Action")
-        self._action_copy_radio = QRadioButton(
-            "Copy  —  originals stay where they are (recommended)"
-        )
-        self._action_copy_radio.setChecked(True)
-        self._action_move_radio = QRadioButton(
-            "Move  —  source files are deleted after each copy is hash-verified"
-        )
-        action_layout.addWidget(self._action_copy_radio)
-        action_layout.addWidget(self._action_move_radio)
-        self._action_group = QButtonGroup(self)
-        self._action_group.addButton(self._action_copy_radio)
-        self._action_group.addButton(self._action_move_radio)
-        outer.addWidget(action_card)
+        toggles.addStretch(1)
+        outer.addLayout(toggles)
 
-        # Folder pickers card
-        paths_card, paths_layout = _make_card("Folders")
-        paths_layout.setSpacing(10)
-
-        self._source_edit = _DropLineEdit("Drop a folder here, or browse…")
-        source_btn = QPushButton("Browse…")
-        source_btn.clicked.connect(self._pick_source)
-        src_row = QHBoxLayout()
-        src_row.addWidget(self._labeled("Source"))
-        src_row.addWidget(self._source_edit, stretch=1)
-        src_row.addWidget(source_btn)
-        paths_layout.addLayout(src_row)
-
-        self._dest_edit = _DropLineEdit("Drop a folder here, or browse…")
-        dest_btn = QPushButton("Browse…")
-        dest_btn.clicked.connect(self._pick_dest)
-        dst_row = QHBoxLayout()
-        dst_row.addWidget(self._labeled("Destination"))
-        dst_row.addWidget(self._dest_edit, stretch=1)
-        dst_row.addWidget(dest_btn)
-        paths_layout.addLayout(dst_row)
-
-        outer.addWidget(paths_card)
+        # Helper text that reacts to selections
+        self._helper = QLabel()
+        self._helper.setProperty("role", "subtitle")
+        self._helper.setWordWrap(True)
+        self._mode_ctrl.changed.connect(lambda _k: self._update_helper())
+        self._action_ctrl.changed.connect(lambda _k: self._update_helper())
+        self._update_helper()
+        outer.addWidget(self._helper)
 
         outer.addItem(
             QSpacerItem(0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
@@ -169,32 +105,33 @@ class SourcePage(QWidget):
 
         scan_btn = QPushButton("Scan")
         scan_btn.setDefault(True)
-        scan_btn.setMinimumHeight(40)
-        scan_btn.setMinimumWidth(120)
+        scan_btn.setMinimumHeight(44)
+        scan_btn.setMinimumWidth(140)
+        scan_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         scan_btn.clicked.connect(self._emit_scan)
         outer.addWidget(scan_btn, alignment=Qt.AlignmentFlag.AlignRight)
 
-    @staticmethod
-    def _labeled(text: str) -> QLabel:
-        label = QLabel(text)
-        label.setMinimumWidth(86)
-        return label
-
-    def _pick_source(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, "Select source folder")
-        if path:
-            self._source_edit.setText(path)
-
-    def _pick_dest(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, "Select destination folder")
-        if path:
-            self._dest_edit.setText(path)
+    def _update_helper(self) -> None:
+        mode = self._mode_ctrl.value()
+        action = self._action_ctrl.value()
+        mode_text = (
+            "You'll review every folder name and tick which ones to keep "
+            "as destination categories."
+            if mode == PROCESSING_MODE_GROUP
+            else "Every file lands directly in the destination — no subfolders."
+        )
+        action_text = (
+            "Copy leaves originals where they are."
+            if action == ACTION_COPY
+            else "Move deletes source files after each copy is hash-verified."
+        )
+        self._helper.setText(f"{mode_text}  {action_text}")
 
     def _emit_scan(self) -> None:
-        src_text = self._source_edit.text().strip()
-        dst_text = self._dest_edit.text().strip()
+        src_text = self._source_zone.path().strip()
+        dst_text = self._dest_zone.path().strip()
         if not src_text or not dst_text:
-            QMessageBox.warning(self, "Missing path", "Please choose both folders.")
+            QMessageBox.warning(self, "Missing folder", "Please choose both a source and a destination.")
             return
         src = Path(src_text)
         dst = Path(dst_text)
@@ -207,16 +144,12 @@ class SourcePage(QWidget):
         except OSError:
             src_resolved, dst_resolved = src, dst
         if src_resolved == dst_resolved:
-            QMessageBox.warning(
-                self, "Same folder", "Source and destination must be different."
-            )
+            QMessageBox.warning(self, "Same folder", "Source and destination must be different.")
             return
         try:
             src_str = str(src_resolved)
             dst_str = str(dst_resolved)
-            if dst_str == src_str or dst_str.startswith(src_str + "/") or dst_str.startswith(
-                src_str + "\\"
-            ):
+            if dst_str == src_str or dst_str.startswith(src_str + "/") or dst_str.startswith(src_str + "\\"):
                 QMessageBox.warning(
                     self,
                     "Nested destination",
@@ -225,12 +158,6 @@ class SourcePage(QWidget):
                 return
         except Exception:
             pass
-        mode = (
-            PROCESSING_MODE_GROUP
-            if self._mode_group_radio.isChecked()
-            else PROCESSING_MODE_FLATTEN
+        self.scan_requested.emit(
+            src, dst, self._mode_ctrl.value(), self._action_ctrl.value()
         )
-        action = (
-            ACTION_COPY if self._action_copy_radio.isChecked() else ACTION_MOVE
-        )
-        self.scan_requested.emit(src, dst, mode, action)

@@ -1,4 +1,4 @@
-"""Root QMainWindow wiring the four stacked pages together."""
+"""Root QMainWindow: sidebar stepper + stacked pages."""
 
 from __future__ import annotations
 
@@ -6,10 +6,12 @@ from pathlib import Path
 from typing import Optional
 
 from PyQt6.QtWidgets import (
+    QHBoxLayout,
     QMainWindow,
     QMessageBox,
     QStackedWidget,
     QStatusBar,
+    QWidget,
 )
 
 from app.config import ACTION_COPY, PROCESSING_MODE_FLATTEN, PROCESSING_MODE_GROUP
@@ -21,16 +23,29 @@ from app.ui.source_page import SourcePage
 from app.ui.mapping_page import MappingPage
 from app.ui.progress_page import ProgressPage
 from app.ui.summary_page import SummaryPage
+from app.ui.widgets import Sidebar
 
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Semantic File Aggregator")
-        self.resize(1040, 700)
+        self.resize(1100, 720)
+
+        central = QWidget()
+        self.setCentralWidget(central)
+        root = QHBoxLayout(central)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        self._sidebar = Sidebar(
+            ["Start", "Review folders", "Processing", "Summary"]
+        )
+        root.addWidget(self._sidebar)
 
         self._stack = QStackedWidget()
-        self.setCentralWidget(self._stack)
+        root.addWidget(self._stack, stretch=1)
+
         self.setStatusBar(QStatusBar())
 
         self._source_page = SourcePage()
@@ -60,6 +75,14 @@ class MainWindow(QMainWindow):
         self._items: list[MediaItem] = []
         self._folder_entries: list[FolderEntry] = []
 
+        self._goto(0)
+
+    # ---------- navigation ----------
+    def _goto(self, index: int) -> None:
+        self._stack.setCurrentIndex(index)
+        self._sidebar.set_current(index)
+
+    # ---------- workflow ----------
     def _on_scan_requested(
         self, source: Path, destination: Path, mode: str, action: str
     ) -> None:
@@ -88,14 +111,13 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Scan complete — no media files found.")
             return
         self.statusBar().showMessage(
-            f"{len(items)} media files discovered in "
-            f"{len(folder_entries)} unique folder names."
+            f"{len(items)} media files in {len(folder_entries)} unique folder names."
         )
         if self._mode == PROCESSING_MODE_FLATTEN:
             self._run_flatten()
             return
         self._mapping_page.set_entries(folder_entries)
-        self._stack.setCurrentWidget(self._mapping_page)
+        self._goto(1)
 
     def _run_flatten(self) -> None:
         if not self._destination_root:
@@ -103,7 +125,7 @@ class MainWindow(QMainWindow):
         mapping = {item.parent_folder: "" for item in self._items}
         plan = build_plan(self._items, mapping, self._destination_root)
         self._progress_page.reset(len(plan))
-        self._stack.setCurrentWidget(self._progress_page)
+        self._goto(2)
         self._process_worker = ProcessWorker(
             plan, self._destination_root, action=self._action
         )
@@ -118,7 +140,7 @@ class MainWindow(QMainWindow):
             return
         plan = build_plan_from_picks(self._items, picks, self._destination_root)
         self._progress_page.reset(len(plan))
-        self._stack.setCurrentWidget(self._progress_page)
+        self._goto(2)
         self._process_worker = ProcessWorker(
             plan, self._destination_root, action=self._action
         )
@@ -139,7 +161,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Done.")
         assert self._destination_root is not None
         self._summary_page.set_result(stats, self._destination_root, self._action)
-        self._stack.setCurrentWidget(self._summary_page)
+        self._goto(3)
 
     def _on_worker_error(self, message: str) -> None:
         QMessageBox.critical(self, "Worker error", message)
@@ -147,4 +169,4 @@ class MainWindow(QMainWindow):
     def _on_done(self) -> None:
         self._items.clear()
         self._folder_entries.clear()
-        self._stack.setCurrentWidget(self._source_page)
+        self._goto(0)

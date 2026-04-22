@@ -23,8 +23,8 @@ class ProgressPage(QWidget):
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(32, 24, 32, 24)
-        layout.setSpacing(12)
+        layout.setContentsMargins(48, 40, 48, 32)
+        layout.setSpacing(14)
 
         header = QLabel("Processing…")
         header.setProperty("role", "title")

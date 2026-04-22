@@ -154,16 +154,15 @@ class MappingPage(QWidget):
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(32, 24, 32, 24)
+        layout.setContentsMargins(48, 40, 48, 32)
         layout.setSpacing(14)
 
-        header = QLabel("Pick which folders to keep as categories")
+        header = QLabel("Review discovered folders")
         header.setProperty("role", "title")
         sub = QLabel(
-            "Every unique folder name discovered in your source tree is listed "
-            "below. Tick the ones that should become destination folders. "
-            "Files are routed to their deepest ticked ancestor. Click "
-            "Time splits to further split a folder by EXIF capture time."
+            "Every unique folder name in your source is listed below. Tick "
+            "the ones to keep as categories. Files route to the deepest "
+            "ticked ancestor. Optionally split a folder by EXIF time."
         )
         sub.setProperty("role", "subtitle")
         sub.setWordWrap(True)
