@@ -35,29 +35,11 @@ No Python required. No admin rights required.
 - **Reproducible builds on GitHub** — the Windows installer is built by
   our public GitHub Actions workflow from a specific commit. No installer
   is ever uploaded by hand.
-- **Cryptographic build attestation** — every release carries a sigstore
-  attestation proving the binary was produced by that workflow from that
-  commit. Verify with one command (see below).
-- **SHA-256 checksum** is published alongside every installer so you can
-  confirm the download was not tampered with.
 - **Copy by default** — the app never deletes your source files unless you
   explicitly pick *Move*, and then only after each destination copy is
   hash-verified byte-for-byte.
 - **Duplicates are isolated, never dropped** — any exact-duplicate files
   land under `Duplicates/` so you can review them before deleting.
-
-### Verify your download
-
-```powershell
-# Windows PowerShell — compare against the .sha256 published alongside the installer
-Get-FileHash SemanticFileAggregator-Setup.exe -Algorithm SHA256
-```
-
-```bash
-# Verify GitHub's build attestation (requires gh CLI)
-gh attestation verify SemanticFileAggregator-Setup.exe \
-    --repo vkavali/sort-folders-and-photos
-```
 
 See [`SECURITY.md`](SECURITY.md) for the full trust model.
 

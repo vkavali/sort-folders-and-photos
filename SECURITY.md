@@ -26,48 +26,22 @@ point it at.
   been hash-verified byte-for-byte. In *Copy* mode (default), originals are
   never touched.
 
-## How to verify a download before running it
+## Reading the source
 
-Every release on the GitHub **Releases** page comes with:
+Every release on the GitHub **Releases** page is built by the public
+`Build installer` GitHub Actions workflow from a specific commit in this
+repository. You can:
 
-1. The installer: `SemanticFileAggregator-Setup.exe`
-2. A checksum file: `SemanticFileAggregator-Setup.exe.sha256`
-3. A signed GitHub build attestation (sigstore) that proves the exact
-   installer was built by this repository's GitHub Actions workflow from
-   a specific commit SHA.
+1. Read the `app/` directory to audit what the program does.
+2. Read `.github/workflows/release.yml` to see exactly how the installer is
+   assembled — there is no hidden build step.
+3. Rebuild it yourself: see *Run from source* in the README.
 
-To verify:
+## Scanning with antivirus
 
-### 1. Checksum (any OS)
-
-```powershell
-# Windows PowerShell
-Get-FileHash SemanticFileAggregator-Setup.exe -Algorithm SHA256
-```
-
-```bash
-# macOS / Linux
-shasum -a 256 SemanticFileAggregator-Setup.exe
-```
-
-Compare the output against the value inside `.sha256`. If they match, the
-file was not tampered with after upload.
-
-### 2. Build attestation (proves which commit built it)
-
-```bash
-gh attestation verify SemanticFileAggregator-Setup.exe --repo vkavali/sort-folders-and-photos
-```
-
-This uses GitHub's built-in attestation feature to cryptographically verify
-that the installer was produced by our own release workflow from a specific
-commit, not substituted or modified.
-
-### 3. Scan with your antivirus
-
-You can also upload the installer to <https://virustotal.com> for a
-multi-engine scan. Results should be clean. If they are not, please open a
-GitHub issue with the details.
+You can upload the installer to <https://virustotal.com> for a multi-engine
+scan. Results should be clean. If they are not, please open a GitHub issue
+with the details.
 
 ## Windows SmartScreen notice
 
@@ -76,16 +50,15 @@ cost $100–400 per year). On first run, Windows SmartScreen may show:
 
 > "Windows protected your PC"
 
-Click **More info → Run anyway** if you have verified the checksum and
-attestation. As the download count grows, SmartScreen's reputation system
-will eventually stop warning.
+Click **More info → Run anyway**. As the download count grows, SmartScreen's
+reputation system will eventually stop warning.
 
 A signed installer is planned for a future release.
 
 ## Reporting a vulnerability
 
 Open a GitHub issue, or (for anything sensitive) email the maintainer listed
-in the repository's README.
+in the repository's profile.
 
 ## Dependencies
 

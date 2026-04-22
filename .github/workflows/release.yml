@@ -8,8 +8,6 @@ on:
 
 permissions:
   contents: write
-  id-token: write         # required for build attestation (sigstore)
-  attestations: write     # required for build attestation
 
 jobs:
   build:
@@ -59,32 +57,15 @@ jobs:
           $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           & $iscc "/DAppVersion=${{ steps.ver.outputs.version }}" installer.iss
 
-      - name: Generate SHA-256 checksum
-        shell: pwsh
-        run: |
-          $exe = "Output/SemanticFileAggregator-Setup.exe"
-          $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
-          "$hash  SemanticFileAggregator-Setup.exe" | Out-File -Encoding ascii "$exe.sha256"
-          Write-Host "SHA-256: $hash"
-
-      - name: Generate build attestation (sigstore)
-        uses: actions/attest-build-provenance@v2
-        with:
-          subject-path: Output/SemanticFileAggregator-Setup.exe
-
       - name: Upload installer as workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: SemanticFileAggregator-Setup
-          path: |
-            Output/SemanticFileAggregator-Setup.exe
-            Output/SemanticFileAggregator-Setup.exe.sha256
+          path: Output/SemanticFileAggregator-Setup.exe
 
       - name: Publish GitHub Release (only on tag push)
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            Output/SemanticFileAggregator-Setup.exe
-            Output/SemanticFileAggregator-Setup.exe.sha256
+          files: Output/SemanticFileAggregator-Setup.exe
           generate_release_notes: true
